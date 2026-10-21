@@ -28,6 +28,8 @@ import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationServic
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as OverseerWakeFacts from "../overseer/OverseerWakeFacts.ts";
+import * as Orchestrator from "./Orchestrator.ts";
+import * as OverseerFeature from "../overseer/OverseerFeature.ts";
 import { continueRestartedRun } from "./RestartContinuation.ts";
 
 export class OrchestrationEffectExecutionError extends Schema.TaggedError<OrchestrationEffectExecutionError>()(
@@ -95,10 +97,31 @@ export const layerExecutor: Layer.Layer<
       yield* ThreadTitleRegenerationService.ThreadTitleRegenerationService;
     const threads = yield* ThreadManagementService.ThreadManagementService;
     const settings = yield* ServerSettings.ServerSettingsService;
+    const orchestrator = yield* Effect.serviceOption(Orchestrator.OrchestratorV2);
     return OrchestrationEffectExecutorV2.of({
       execute: (effect, options) => {
         const willRetry = options?.willRetry ?? false;
         switch (effect.request.type) {
+          case "overseer.mailbox.flush": {
+            const generation = effect.request.generation;
+            return Effect.gen(function* () {
+              if (!(yield* OverseerFeature.Enabled)) return;
+              if (Option.isNone(orchestrator) || !orchestrator.value.syncOverseer) return;
+              yield* orchestrator.value.syncOverseer({
+                observerThreadId: effect.threadId,
+                generation,
+              });
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: effect.request.type,
+                    cause,
+                  }),
+              ),
+            );
+          }
           case "provider-runtime.continue": {
             const sourceRunId = effect.request.sourceRunId;
             return continueRestartedRun({ threadId: effect.threadId, sourceRunId }).pipe(
@@ -231,6 +254,7 @@ export const layerExecutor: Layer.Layer<
                   Effect.gen(function* () {
                     if (effect.request.type !== "provider-turn.steer") return;
                     const messageId = effect.request.messageId;
+                    if (messageId.startsWith("message:overseer:")) return;
                     const projection = yield* threads.getThreadRecords(
                       effect.threadId,
                       ["messages", "runs"],
@@ -255,6 +279,7 @@ export const layerExecutor: Layer.Layer<
                     ) {
                       return yield* error;
                     }
+                    if (effect.request.messageId.startsWith("message:overseer:")) return;
                     const projection = yield* threads.getThreadRecords(
                       effect.threadId,
                       ["messages", "runs"],

@@ -3,11 +3,13 @@ import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
 import CanonicalState from "./Migration.ts";
 import WakeFacts from "./WakeFactsMigration.ts";
+import Mailbox from "./MailboxMigration.ts";
 
 const run = Migrator.make({});
 const loader = Migrator.fromRecord({
   "1_CanonicalState": CanonicalState,
   "2_WakeFacts": WakeFacts,
+  "3_Mailbox": Mailbox,
 });
 
 // A fork must not consume upstream's migration IDs or leave its manifest divergent.

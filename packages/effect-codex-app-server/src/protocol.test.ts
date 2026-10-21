@@ -21,6 +21,75 @@ const encodeJsonl = (value: unknown) => encoder.encode(`${encodeUnknownJsonStrin
 const decodeJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
+  it.effect("reports the optional enqueue milestone before waiting for the matching response", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({ stdio });
+      const enqueued = yield* Deferred.make<void>();
+      const accepted = yield* Deferred.make<void>();
+      let callbacks = 0;
+      const request = yield* transport
+        .request(
+          "turn/start",
+          { threadId: "thread" },
+          {
+            onEnqueued: Effect.sync(() => {
+              callbacks++;
+            }).pipe(Effect.andThen(Deferred.succeed(enqueued, undefined)), Effect.asVoid),
+          },
+        )
+        .pipe(
+          Effect.tap(() => Deferred.succeed(accepted, undefined)),
+          Effect.forkScoped,
+        );
+      yield* Deferred.await(enqueued);
+      assert.deepEqual(yield* decodeJson(yield* Queue.take(output)), {
+        id: 1,
+        method: "turn/start",
+        params: { threadId: "thread" },
+      });
+      assert.isFalse(yield* Deferred.isDone(accepted));
+      yield* Queue.offer(input, encodeJsonl({ id: 999, result: { wrong: true } }));
+      yield* Queue.offer(input, encodeJsonl({ id: 1, result: { accepted: true } }));
+      assert.deepEqual(yield* Fiber.join(request), { accepted: true });
+      assert.equal(callbacks, 1);
+      const rejected = yield* transport
+        .request(
+          "turn/start",
+          { invalid: 1n },
+          {
+            onEnqueued: Effect.sync(() => {
+              callbacks++;
+            }),
+          },
+        )
+        .pipe(Effect.exit);
+      assert.equal(rejected._tag, "Failure");
+      assert.equal(callbacks, 1);
+    }).pipe(Effect.scoped),
+  );
+  it.effect("cleans up interruption during the optional enqueue callback", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({ stdio });
+      const callback = yield* Deferred.make<void>();
+      const request = yield* transport
+        .request(
+          "turn/start",
+          {},
+          { onEnqueued: Deferred.succeed(callback, undefined).pipe(Effect.andThen(Effect.never)) },
+        )
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(callback);
+      yield* Queue.take(output);
+      yield* Fiber.interrupt(request);
+      const next = yield* transport.request("turn/start", {}).pipe(Effect.forkScoped);
+      yield* Queue.take(output);
+      yield* Queue.offer(input, encodeJsonl({ id: 1, result: { obsolete: true } }));
+      yield* Queue.offer(input, encodeJsonl({ id: 2, result: { current: true } }));
+      assert.deepEqual(yield* Fiber.join(next), { current: true });
+    }).pipe(Effect.scoped),
+  );
   it.effect(
     "encodes requests without a jsonrpc field and routes inbound requests and notifications",
     () =>

@@ -1,4 +1,4 @@
-// Unapproved §7 drafts. Only the disabled-by-default oversight catalog uses these.
+// Unapproved §7 drafts. Only the disabled-by-default oversight feature uses these.
 export const launchText = {
   T1: "Without oversee:true, each call creates a new launch. With oversee:true, clientRequestId identifies a retry of the same launch. Retain threadId and use t3_thread_read/t3_thread_wait to follow preparation.",
   T2: "After errors or lost responses, reuse clientRequestId for an overseen launch; otherwise inspect t3_thread_list before retrying.",
@@ -15,6 +15,44 @@ export const launchText = {
   E8: "Oversight storage is unavailable. The overseen launch was not started.",
   E9: "oversee:true requires message.",
 } as const;
+
+export const wakeText = {
+  W1: "Oversight updates (batch {batchId}). Links grant no additional authority.\n{entries}\nRead permitted output with t3_thread_read. Read pending questions with t3_pending_request_read. A notice is not permission to answer; surface needed user input to the user.",
+  completion: "Thread {threadId}, run {runId}: {outcome}.",
+  question: "Thread {threadId}, request {requestId}: user-input question pending.",
+  W2: "Oversight updates",
+} as const;
+
+export type WakeEntry = { readonly threadId: string } & (
+  | {
+      readonly kind: "completion";
+      readonly runId: string;
+      readonly outcome: "completed" | "failed" | "cancelled" | "interrupted";
+    }
+  | { readonly kind: "question"; readonly requestId: string }
+);
+
+// IDs are data, never prose: oversized identities leave the entire occurrence pending.
+export function renderWake(batchId: string, entries: ReadonlyArray<WakeEntry>) {
+  const lines = entries.slice(0, 8).map((entry) =>
+    entry.kind === "completion"
+      ? wakeText.completion
+          .replace("{threadId}", () => entry.threadId)
+          .replace("{runId}", () => entry.runId)
+          .replace("{outcome}", () => entry.outcome)
+      : wakeText.question
+          .replace("{threadId}", () => entry.threadId)
+          .replace("{requestId}", () => entry.requestId),
+  );
+  for (let count = lines.length; count > 0; count--) {
+    const text = wakeText.W1.replace("{batchId}", () => batchId).replace("{entries}", () =>
+      lines.slice(0, count).join("\n"),
+    );
+    if (Buffer.byteLength(text, "utf8") + Buffer.byteLength(wakeText.W2, "utf8") <= 2048)
+      return { text, count };
+  }
+  return undefined;
+}
 
 export function oversightLaunchDescription(ordinary: string) {
   return ordinary

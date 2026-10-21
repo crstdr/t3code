@@ -349,9 +349,13 @@ it.effect("collapses restart chains and waits for an eventless declined continua
       creationSource: "server",
       notification: { source: { kind: "system" }, outcome: "updated", summary: "Continuation" },
     });
-    const claimed = yield* outbox.claimNext({ workerId: "test", leaseDurationMs: 1000 });
-    assert.isTrue(Option.isSome(claimed));
-    yield* outbox.succeed({ effectId: continuation(a).id, workerId: "test" });
+    let claimed = yield* outbox.claimNext({ workerId: "test", leaseDurationMs: 1000 });
+    if (Option.isSome(claimed) && claimed.value.request.type === "overseer.mailbox.flush") {
+      yield* outbox.succeed({ effectId: claimed.value.id, workerId: "test" });
+      claimed = yield* outbox.claimNext({ workerId: "test", leaseDurationMs: 1000 });
+    }
+    assert.equal(Option.getOrThrow(claimed).id, continuation(a).id);
+    assert.isTrue(yield* outbox.succeed({ effectId: continuation(a).id, workerId: "test" }));
     yield* finish(b, "cancelled", [continuation(b)]);
     assert.equal((yield* occurrences).length, 1);
     const executor = Layer.succeed(Worker.OrchestrationEffectExecutorV2, {
@@ -360,7 +364,7 @@ it.effect("collapses restart chains and waits for an eventless declined continua
     const worker = yield* Worker.OrchestrationEffectWorkerV2.pipe(
       Effect.provide(Worker.layer.pipe(Layer.provide(executor))),
     );
-    assert.equal(yield* worker.drain(), 1);
+    assert.equal(yield* worker.drain(), 2);
     assert.equal((yield* occurrences)[0]!.ready, 1);
     assert.equal(yield* facts.completionOutcome("link:1", a.id), "cancelled");
   }).pipe(enabled, Effect.provide(layerTest)),
@@ -1348,8 +1352,8 @@ it.effect.each(["succeed", "fail"] as const)(
       ]);
       yield* sql`CREATE TRIGGER fail_readiness BEFORE UPDATE ON overseer_occurrences WHEN NEW.ready = 1 BEGIN SELECT RAISE(ABORT, 'fixture'); END`;
       const executor = Layer.succeed(Worker.OrchestrationEffectExecutorV2, {
-        execute: () =>
-          result === "succeed"
+        execute: (effect) =>
+          effect.request.type === "overseer.mailbox.flush" || result === "succeed"
             ? Effect.void
             : Effect.fail(
                 new Worker.OrchestrationEffectExecutionError({
@@ -1362,7 +1366,7 @@ it.effect.each(["succeed", "fail"] as const)(
       const worker = yield* Worker.OrchestrationEffectWorkerV2.pipe(
         Effect.provide(Worker.layerWithOptions({ maxAttempts: 1 }).pipe(Layer.provide(executor))),
       );
-      assert.equal(yield* worker.drain(), 1);
+      assert.equal(yield* worker.drain(), 2);
       const outbox = yield* Outbox.EffectOutboxV2;
       const row = yield* outbox.get(effectId);
       assert.isTrue(Option.isSome(row));

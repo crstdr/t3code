@@ -69,7 +69,10 @@ import * as TestClock from "effect/testing/TestClock";
 import { Tool } from "effect/ai";
 import { formatClaudeResumeCompactionQuestion } from "@t3tools/shared/claudeCompaction";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
+import {
+  getModelSelectionStringOptionValue,
+  applyClaudePromptEffortPrefix,
+} from "@t3tools/shared/model";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
@@ -90,6 +93,10 @@ import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter"
 import type * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import * as ClaudeAdapterV2 from "./ClaudeAdapterV2.ts";
+import * as OverseerNative from "../../overseer/OverseerNative.ts";
+import * as OverseerGate from "../../overseer/OverseerGate.ts";
+import * as OverseerFeature from "../../overseer/OverseerFeature.ts";
+import { wakeExample } from "../../overseer/OverseerText.testkit.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { ClaudeOrchestratorReplayHarness } from "./ClaudeAdapterV2.testkit.ts";
 import { provideDeterministicTestRuntime } from "../testkit/DeterministicRuntime.ts";
@@ -2379,6 +2386,154 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       };
     });
   const makeWakeHarness = makeWakeHarnessWithOptions();
+
+  it.effect.each([1, 8])(
+    "overseer: the real Claude offer preserves the %s-entry W1 body through existing effort formatting",
+    (count) =>
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const text = wakeExample(count).text;
+        const gate = yield* OverseerGate.OverseerGate;
+        const input = makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("overseer-format"),
+          text,
+          attachments: [],
+        });
+        yield* harness.runtime
+          .startTurn({
+            ...input,
+            message: { ...input.message, messageId: MessageId.make("message:overseer:format") },
+          })
+          .pipe(
+            Effect.provideService(OverseerNative.Observer, {
+              handoff: (_uuid, send) => gate.handoff(Effect.succeed(true), send),
+              received: () => Effect.void,
+            }),
+          );
+        assert.equal(harness.offeredMessages.length, 1);
+        assert.equal(
+          harness.offeredMessages[0]!.message.content,
+          applyClaudePromptEffortPrefix(text, "ultrathink"),
+        );
+        assert.isDefined(harness.offeredMessages[0]!.uuid);
+      }).pipe(
+        Effect.scoped,
+        Effect.provideService(OverseerFeature.Enabled, true),
+        Effect.provide(
+          Layer.mergeAll(
+            OverseerGate.layer,
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            NodeServices.layer,
+          ),
+        ),
+      ),
+  );
+
+  it.effect.each([
+    "scalar_echo",
+    "list_echo",
+    "started",
+    "started_then_echo",
+    "no_receipt",
+    "completed_without_start",
+  ] as const)("overseer: Claude receipt requires its exact offered UUID (%s)", (evidence) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const receipts: Array<{ readonly kind: string; readonly uuid: string | undefined }> = [];
+        let admittedUuid: string | undefined;
+        const input = makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("overseer-attempt"),
+          text: "Inspect the workspace.",
+          attachments: [],
+        });
+        yield* harness.runtime
+          .startTurn({
+            ...input,
+            message: { ...input.message, messageId: MessageId.make("message:overseer:claude") },
+          })
+          .pipe(
+            Effect.provideService(OverseerNative.Observer, {
+              handoff: (uuid, send) =>
+                Effect.sync(() => {
+                  admittedUuid = uuid;
+                }).pipe(Effect.andThen(send(Effect.void)), Effect.asSome),
+              received: (kind, uuid) =>
+                Effect.sync(() => {
+                  receipts.push({ kind, uuid });
+                }),
+            }),
+          );
+        const uuid = harness.promptUuid(0);
+        assert.equal(admittedUuid, uuid);
+        assert.deepEqual(receipts, []);
+        const lifecycle = (command: string, state: string) =>
+          claudeSdkFrame({
+            type: "command_lifecycle",
+            command_uuid: command,
+            state,
+            uuid: `lifecycle-${state}-${command}`,
+            session_id: WAKE_NATIVE_SESSION,
+          });
+        yield* harness.offerAndWait(lifecycle(uuid, "queued"));
+        yield* harness.offerAndWait(lifecycle("unrelated", "started"));
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            ...makeAssistantTextFrame({ uuid: "unrelated", text: "Other work." }),
+            user_message_uuid: "unrelated",
+          }),
+        );
+        assert.deepEqual(receipts, []);
+        if (evidence === "completed_without_start") {
+          yield* harness.offerAndWait(lifecycle(uuid, "completed"));
+          yield* harness.awaitTerminal(1);
+        } else if (evidence === "started" || evidence === "started_then_echo") {
+          yield* harness.offerAndWait(lifecycle(uuid, "started"));
+          if (evidence === "started_then_echo")
+            yield* harness.offerAndWait(
+              claudeSdkFrame({
+                ...makeAssistantTextFrame({ uuid: "echo-after-start", text: "Current work." }),
+                user_message_uuid: uuid,
+              }),
+            );
+        } else {
+          const frame = makeResultFrame({ uuid: "receipt-result", result: "Done." });
+          yield* harness.offerAndWait(
+            evidence === "no_receipt"
+              ? frame
+              : claudeSdkFrame({
+                  ...frame,
+                  ...(evidence === "list_echo"
+                    ? { user_message_uuids: ["unrelated", uuid] }
+                    : { user_message_uuid: uuid }),
+                }),
+          );
+          yield* harness.awaitTerminal(1);
+        }
+        if (evidence === "no_receipt" || evidence === "completed_without_start")
+          assert.deepEqual(receipts, []);
+        else {
+          assert.isAtLeast(receipts.length, 1);
+          assert.isTrue(receipts.every((receipt) => receipt.uuid === uuid));
+          assert.equal(
+            receipts[0]!.kind,
+            evidence.startsWith("started") ? "claude_started" : "claude_echo",
+          );
+        }
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
 
   describe("Claude settings restrictions", () => {
     it.effect("resolves cached managed policy from the configured home through the real SDK", () =>

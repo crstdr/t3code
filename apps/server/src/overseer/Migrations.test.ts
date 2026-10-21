@@ -19,6 +19,7 @@ const featureTables = [
   "overseer_mailboxes",
   "overseer_migrations",
   "overseer_occurrences",
+  "overseer_transports",
   "overseer_work_runs",
 ];
 const tables = Effect.gen(function* () {
@@ -47,6 +48,7 @@ it.effect("fresh application persistence applies the feature track after core mi
     assert.deepEqual(yield* sql`SELECT migration_id, name FROM overseer_migrations`, [
       { migration_id: 1, name: "CanonicalState" },
       { migration_id: 2, name: "WakeFacts" },
+      { migration_id: 3, name: "Mailbox" },
     ]);
     assert.deepEqual(
       yield* sql`SELECT name FROM sqlite_schema WHERE name='overseer_attempts_run_attempt_idx'`,
@@ -68,6 +70,7 @@ it.effect("upstream-only migration guard accepts a database with namespaced feat
     assert.deepEqual(yield* runMigrations(), [
       [1, "CanonicalState"],
       [2, "WakeFacts"],
+      [3, "Mailbox"],
     ]);
     yield* sql`INSERT INTO overseer_mailboxes(observer_thread_id, hold_mask) VALUES ('observer', 1)`;
     assert.deepEqual(yield* runCoreMigrations(), []);
@@ -87,7 +90,10 @@ it.effect("upgrades the slice-1 schema without changing existing mailbox revisio
       loader: Migrator.fromRecord({ "1_CanonicalState": CanonicalState }),
     });
     yield* sql`INSERT INTO overseer_mailboxes(observer_thread_id, revision) VALUES ('observer', 7)`;
-    assert.deepEqual(yield* runMigrations(), [[2, "WakeFacts"]]);
+    assert.deepEqual(yield* runMigrations(), [
+      [2, "WakeFacts"],
+      [3, "Mailbox"],
+    ]);
     assert.deepEqual(
       yield* sql`SELECT revision FROM overseer_mailboxes WHERE observer_thread_id = 'observer'`,
       [{ revision: 7 }],
@@ -127,6 +133,7 @@ it.effect("re-running the feature migrator is idempotent and preserves data", ()
     assert.deepEqual(yield* sql`SELECT migration_id, name FROM overseer_migrations`, [
       { migration_id: 1, name: "CanonicalState" },
       { migration_id: 2, name: "WakeFacts" },
+      { migration_id: 3, name: "Mailbox" },
     ]);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

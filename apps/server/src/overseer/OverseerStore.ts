@@ -11,6 +11,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as OverseerFlush from "./OverseerFlush.ts";
+import * as OverseerGate from "./OverseerGate.ts";
 
 export class OverseerStoreError extends Schema.TaggedError<OverseerStoreError>()(
   "OverseerStoreError",
@@ -84,6 +86,7 @@ type MailboxRow = {
   readonly next_batch_number: number;
   readonly hold_reason: HoldReason | null;
   readonly hold_mask: number;
+  readonly flush_id: string | null;
 };
 type OccurrenceRow = {
   readonly link_id: string;
@@ -156,7 +159,10 @@ export class OverseerStore extends Context.Service<
       observer: ThreadId,
       batchNumber: number,
     ) => StoreResult<ReadonlyArray<OccurrenceRow>>;
-    readonly stageBatch: (fence: Fence) => StoreResult<StageResult>;
+    readonly stageBatch: (fence: Fence, limit?: number) => StoreResult<StageResult>;
+    readonly touch: (observer: ThreadId) => StoreResult<void>;
+    readonly batchDispatchable: (observer: ThreadId, batch: number) => StoreResult<boolean>;
+    readonly releaseUnsentBatch: (observer: ThreadId, batch: number) => StoreResult<void>;
     readonly freezeAttempt: (
       input: Fence & {
         readonly batchNumber: number;
@@ -203,6 +209,7 @@ const pageSize = (limit = 20) => Math.max(1, Math.min(100, Math.trunc(limit) || 
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const gate = yield* OverseerGate.OverseerGate;
   const execute = <A, E, R>(operation: string, effect: Effect.Effect<A, E, R>) =>
     effect.pipe(
       Effect.mapError((cause) =>
@@ -210,13 +217,14 @@ const make = Effect.gen(function* () {
       ),
     );
   const transaction = <A, E, R>(operation: string, effect: Effect.Effect<A, E, R>) =>
-    execute(operation, sql.withTransaction(effect));
+    execute(operation, gate.commit(sql.withTransaction(effect)));
 
   const mailbox = Effect.fn("OverseerStore.mailbox")(function* (observer: string) {
     return (yield* sql<MailboxRow>`SELECT * FROM overseer_mailboxes WHERE observer_thread_id = ${observer}`)[0];
   });
   const dirty = Effect.fn("OverseerStore.dirty")(function* (observer: string) {
     yield* sql`UPDATE overseer_mailboxes SET revision = revision + 1 WHERE observer_thread_id = ${observer}`;
+    yield* OverseerFlush.schedule(observer).pipe(Effect.provideService(SqlClient.SqlClient, sql));
   });
   const requireFence = Effect.fn("OverseerStore.requireFence")(function* (fence: Fence) {
     const row = yield* mailbox(fence.observerThreadId);
@@ -338,6 +346,7 @@ const make = Effect.gen(function* () {
     );
   });
   const retireMailbox = Effect.fn("OverseerStore.retireMailbox")(function* (observer: string) {
+    yield* sql`UPDATE overseer_transports SET phase = 'retired' WHERE observer_thread_id = ${observer} AND phase <> 'received'`;
     yield* sql`UPDATE overseer_mailboxes SET epoch = epoch + 1, hold_mask = 0, processed_revision = revision
       WHERE observer_thread_id = ${observer}`;
   });
@@ -519,7 +528,15 @@ const make = Effect.gen(function* () {
         ORDER BY source_sequence, kind, source_id, link_id LIMIT ${batchSize}`,
       );
     }),
-    stageBatch: Effect.fn("OverseerStore.stageBatch")(function* (fence) {
+    touch: (observer) => transaction("touch", dirty(observer)),
+    batchDispatchable: (observer, batch) =>
+      execute("batchDispatchable", batchEligible(observer, batch)),
+    releaseUnsentBatch: (observer, batch) =>
+      transaction(
+        "releaseUnsentBatch",
+        disposeBatch(observer, batch, "lifecycle", false).pipe(Effect.andThen(dirty(observer))),
+      ),
+    stageBatch: Effect.fn("OverseerStore.stageBatch")(function* (fence, limit = batchSize) {
       return yield* transaction(
         "stageBatch",
         Effect.gen(function* () {
@@ -549,7 +566,10 @@ const make = Effect.gen(function* () {
             }
             return { state: "ready" as const, batch: existing };
           }
-          const entries = yield* eligible(fence.observerThreadId);
+          const entries = (yield* eligible(fence.observerThreadId)).slice(
+            0,
+            Math.max(1, Math.min(batchSize, limit)),
+          );
           if ((yield* reconcileQuestions(fence.observerThreadId, entries)) > 0)
             return { state: "reconciled" as const };
           if (entries.length === 0) {
@@ -723,11 +743,28 @@ const make = Effect.gen(function* () {
       yield* transaction(
         "stop",
         Effect.gen(function* () {
+          const snapshot = yield* sql<{
+            readonly link_id: string;
+            readonly kind: string;
+            readonly source_id: string;
+          }>`SELECT json_extract(m.value, '$.linkId') AS link_id,
+            json_extract(m.value, '$.kind') AS kind, json_extract(m.value, '$.sourceId') AS source_id
+            FROM overseer_transports t, json_each(t.members_json) m
+            WHERE t.observer_thread_id = ${observer} AND t.phase IN ('prepared', 'queued', 'frozen', 'submitted')`;
+          for (const member of snapshot)
+            yield* sql`UPDATE overseer_occurrences SET disposition = 'suppressed', batch_number = NULL
+              WHERE link_id = ${member.link_id} AND kind = ${member.kind} AND source_id = ${member.source_id}
+                AND disposition = 'pending'`;
+          yield* sql`UPDATE overseer_transports SET phase = 'retired' WHERE observer_thread_id = ${observer}
+            AND phase IN ('prepared', 'queued', 'frozen', 'submitted')`;
           const batches =
             yield* sql<BatchRow>`SELECT * FROM overseer_batches WHERE observer_thread_id = ${observer} AND state IN ('queued', 'frozen')`;
           for (const batch of batches)
             yield* disposeBatch(observer, batch.batch_number, "stop", true);
           yield* sql`UPDATE overseer_mailboxes SET epoch = epoch + 1, revision = revision + 1, hold_mask = hold_mask | ${holdBits.stop} WHERE observer_thread_id = ${observer}`;
+          yield* OverseerFlush.schedule(observer).pipe(
+            Effect.provideService(SqlClient.SqlClient, sql),
+          );
         }),
       );
     }),
@@ -741,21 +778,37 @@ const make = Effect.gen(function* () {
             yield* disposeBatch(observer, batch.batch_number, "lifecycle", false);
           yield* sql`UPDATE overseer_mailboxes SET epoch = epoch + 1, revision = revision + 1,
           hold_mask = hold_mask | ${holdBits[reason]} WHERE observer_thread_id = ${observer}`;
+          yield* OverseerFlush.schedule(observer).pipe(
+            Effect.provideService(SqlClient.SqlClient, sql),
+          );
         }),
       );
     }),
     resume: Effect.fn("OverseerStore.resume")(function* (observer, reason) {
       yield* transaction(
         "resume",
-        sql`UPDATE overseer_mailboxes SET hold_mask = hold_mask & ${31 ^ holdBits[reason]},
-        epoch = epoch + 1, revision = revision + 1 WHERE observer_thread_id = ${observer} AND (hold_mask & ${holdBits[reason]}) <> 0`,
+        Effect.gen(function* () {
+          const rows =
+            yield* sql`UPDATE overseer_mailboxes SET hold_mask = hold_mask & ${31 ^ holdBits[reason]},
+            epoch = epoch + 1, revision = revision + 1 WHERE observer_thread_id = ${observer} AND (hold_mask & ${holdBits[reason]}) <> 0 RETURNING observer_thread_id`;
+          if (rows.length > 0)
+            yield* OverseerFlush.schedule(observer).pipe(
+              Effect.provideService(SqlClient.SqlClient, sql),
+            );
+        }),
       ).pipe(Effect.asVoid);
     }),
     resumeExplicitly: Effect.fn("OverseerStore.resumeExplicitly")(function* (observer) {
       yield* transaction(
         "resumeExplicitly",
-        sql`UPDATE overseer_mailboxes SET hold_mask = hold_mask & 30,
-        epoch = epoch + 1, revision = revision + 1 WHERE observer_thread_id = ${observer} AND (hold_mask & 1) <> 0`,
+        Effect.gen(function* () {
+          const rows = yield* sql`UPDATE overseer_mailboxes SET hold_mask = hold_mask & 30,
+            epoch = epoch + 1, revision = revision + 1 WHERE observer_thread_id = ${observer} AND (hold_mask & 1) <> 0 RETURNING observer_thread_id`;
+          if (rows.length > 0)
+            yield* OverseerFlush.schedule(observer).pipe(
+              Effect.provideService(SqlClient.SqlClient, sql),
+            );
+        }),
       ).pipe(Effect.asVoid);
     }),
     unlink: Effect.fn("OverseerStore.unlink")((linkId) =>
@@ -819,6 +872,8 @@ const make = Effect.gen(function* () {
     clearFeatureData: transaction(
       "clearFeatureData",
       Effect.gen(function* () {
+        yield* sql`DELETE FROM orchestration_v2_effect_outbox WHERE effect_type = 'overseer.mailbox.flush'`;
+        yield* sql`DELETE FROM overseer_transports`;
         yield* sql`DELETE FROM overseer_occurrences`;
         yield* sql`DELETE FROM overseer_background_owners`;
         yield* sql`DELETE FROM overseer_work_runs`;
@@ -831,4 +886,4 @@ const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(OverseerStore, make);
+export const layer = Layer.effect(OverseerStore, make).pipe(Layer.provide(OverseerGate.layer));

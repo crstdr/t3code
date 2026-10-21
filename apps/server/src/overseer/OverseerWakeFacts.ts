@@ -20,6 +20,9 @@ import { isNativeMaintenanceCommand } from "../orchestration-v2/CommandPolicy.ts
 import { runOutcome } from "../orchestration-v2/RestartBackgroundNote.ts";
 import * as OverseerFeature from "./OverseerFeature.ts";
 import * as OverseerStore from "./OverseerStore.ts";
+import * as OverseerTransport from "./OverseerTransport.ts";
+import * as EffectOutbox from "../orchestration-v2/EffectOutbox.ts";
+import * as OverseerGate from "./OverseerGate.ts";
 
 export class WakeFactsError extends Schema.TaggedError<WakeFactsError>()("WakeFactsError", {
   operation: Schema.String,
@@ -64,6 +67,7 @@ const relevant = ({ event }: OrchestrationV2StoredEvent) => {
     case "runtime-request.updated":
     case "thread.archived":
     case "thread.unarchived":
+    case "thread.unsnoozed":
     case "thread.deleted":
       return true;
     case "turn-item.updated":
@@ -76,6 +80,7 @@ const relevant = ({ event }: OrchestrationV2StoredEvent) => {
 export class OverseerWakeFacts extends Context.Service<
   OverseerWakeFacts,
   {
+    readonly commit: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
     // SQL only, after projections and outbox insertion, within the source commit.
     readonly threadEvents: (
       events: ReadonlyArray<OrchestrationV2StoredEvent>,
@@ -97,10 +102,15 @@ export class OverseerWakeFacts extends Context.Service<
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const store = yield* OverseerStore.OverseerStore;
+  const transport = yield* OverseerTransport.OverseerTransport;
+  const outbox = yield* EffectOutbox.EffectOutboxV2;
+  const gate = yield* OverseerGate.OverseerGate;
   const available = yield* Queue.sliding<void>(1);
   const notify = OverseerFeature.Enabled.pipe(
     Effect.flatMap((enabled) =>
-      enabled ? Queue.offer(available, undefined).pipe(Effect.asVoid) : Effect.void,
+      enabled
+        ? Queue.offer(available, undefined).pipe(Effect.andThen(outbox.notifyAvailable()))
+        : Effect.void,
     ),
   );
   const wrap = <A, E, R>(operation: string, effect: Effect.Effect<A, E, R>) =>
@@ -129,11 +139,18 @@ const make = Effect.gen(function* () {
     linkId: string,
     rootRunId: string,
   ) {
-    const runs = yield* runsFor(linkId, rootRunId);
-    const latest = runs.toSorted((a, b) => b.ordinal - a.ordinal)[0];
-    if (!latest) return;
+    const row = (yield* sql<{
+      readonly payload_json: string;
+      readonly restart_interrupted: number;
+    }>`
+      SELECT r.payload_json, w.restart_interrupted FROM overseer_work_runs w
+      JOIN orchestration_v2_projection_runs r ON r.run_id = w.run_id
+      WHERE w.link_id = ${linkId} AND w.root_run_id = ${rootRunId}
+      ORDER BY json_extract(r.payload_json, '$.ordinal') DESC LIMIT 1`)[0];
+    if (!row) return;
+    const latest = yield* decodeRun(row.payload_json);
     const outcome =
-      latest.restartInterrupted && latest.status === "cancelled"
+      row.restart_interrupted === 1 && latest.status === "cancelled"
         ? "interrupted"
         : runOutcome(latest);
     return outcome === "completed" ||
@@ -351,16 +368,23 @@ const make = Effect.gen(function* () {
     if (
       threadId !== undefined &&
       (context?.commandType === "queue.resume" || context?.commandType === "queued-run.start")
-    )
+    ) {
       yield* store.resumeExplicitly(threadId);
+      yield* store.resume(threadId, "provider");
+      yield* store.resume(threadId, "authorization");
+    }
     if (context?.commandType === "message.dispatch") {
       for (const { event } of events) {
         if (
           event.type === "message.updated" &&
           event.threadId === context.threadId &&
           explicitMessage(event.payload)
-        )
+        ) {
           yield* store.resumeExplicitly(event.threadId);
+          yield* store.resume(event.threadId, "provider");
+          yield* store.resume(event.threadId, "authorization");
+          yield* store.touch(event.threadId);
+        }
       }
     }
     // Recheck changed roots even after readiness: late provider evidence or rollback can invalidate a queued/frozen completion.
@@ -391,8 +415,24 @@ const make = Effect.gen(function* () {
     for (const [linkId, roots] of changedRoots)
       for (const root of roots) yield* reconcile(linkId, root);
     for (const link of affected.values()) yield* reconcileLink(link.link_id);
+    yield* transport.observe(events, context?.commandType);
+    const observers = new Set(
+      events
+        .filter(
+          ({ event }) =>
+            (event.type === "run.updated" &&
+              ["completed", "failed", "cancelled", "interrupted"].includes(event.payload.status)) ||
+            event.type === "thread.unsnoozed" ||
+            event.type === "thread.unarchived",
+        )
+        .map(({ event }) => event.threadId),
+    );
+    if (context?.commandType === "queue.resume" || context?.commandType === "queued-run.start")
+      observers.add(context.threadId);
+    for (const observer of observers) yield* store.touch(observer);
   });
   return OverseerWakeFacts.of({
+    commit: gate.commit,
     threadEvents: (events, context) => wrap("thread-events", threadEvents(events, context)),
     projectEvent: (event) =>
       wrap(
@@ -424,15 +464,17 @@ const make = Effect.gen(function* () {
         if (!(yield* OverseerFeature.Enabled)) return;
         yield* wrap(
           "continuation-settled",
-          sql.withTransaction(
-            Effect.gen(function* () {
-              const rows = yield* sql<
-                Work & { readonly link_id: string }
-              >`SELECT w.link_id, w.root_run_id FROM overseer_work_runs w
+          gate.commit(
+            sql.withTransaction(
+              Effect.gen(function* () {
+                const rows = yield* sql<
+                  Work & { readonly link_id: string }
+                >`SELECT w.link_id, w.root_run_id FROM overseer_work_runs w
           JOIN overseer_links l ON l.link_id = w.link_id AND l.state = 'active' WHERE w.run_id = ${sourceRunId}`;
-              const row = rows[0];
-              if (row?.root_run_id != null) yield* reconcile(row.link_id, row.root_run_id);
-            }),
+                const row = rows[0];
+                if (row?.root_run_id != null) yield* reconcile(row.link_id, row.root_run_id);
+              }),
+            ),
           ),
         );
         yield* notify;
@@ -443,4 +485,13 @@ const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(OverseerWakeFacts, make).pipe(Layer.provide(OverseerStore.layer));
+export const layer = Layer.effect(OverseerWakeFacts, make).pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      OverseerStore.layer,
+      OverseerTransport.layer,
+      EffectOutbox.layer,
+      OverseerGate.layer,
+    ),
+  ),
+);

@@ -286,8 +286,8 @@ const layerBase: Layer.Layer<
           ),
           Effect.uninterruptible,
         );
-        return sql
-          .withTransaction(Effect.tap(transaction, () => takeLane))
+        return overseerWakeFacts
+          .commit(sql.withTransaction(Effect.tap(transaction, () => takeLane)))
           .pipe(
             Effect.tap(publish),
             Effect.ensuring(
@@ -670,12 +670,9 @@ const layerBase: Layer.Layer<
             commandId: input.commandId,
             events: normalized,
           });
-          const sequence = storedEvents.at(-1)?.sequence;
-          if (sequence === undefined) {
-            return yield* Effect.die(
-              new Error(`Command ${input.commandId} produced no orchestration events.`),
-            );
-          }
+          const sequence =
+            storedEvents.at(-1)?.sequence ??
+            (yield* eventStore.latestSequence({ threadId: input.threadId }));
           yield* effectOutbox.enqueue(input.effects);
           const receipt: CommandReceiptStore.CommandReceiptV2 = {
             commandId: input.commandId,
