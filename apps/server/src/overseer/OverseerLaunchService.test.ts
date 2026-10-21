@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as ToolAccess from "../mcp/McpToolAccess.ts";
+import { isLiveCallerShell } from "../mcp/OrchestratorMcpService.ts";
 import * as Handlers from "../mcp/toolkits/project/handlers.ts";
 import { ProjectToolkit, ProjectToolkitOverseer } from "../mcp/toolkits/project/tools.ts";
 import { assert, it } from "@effect/vitest";
@@ -79,6 +80,55 @@ it.effect(
       ).pipe(Effect.flip);
       assert.equal(mismatch.message, new Saga.OverseerLaunchError({ reason: "E4" }).message);
     }).pipe(Effect.provide(harness())),
+);
+
+it.effect(
+  "rechecks residency inside the keyed lock even while background liveness remains true",
+  () =>
+    Effect.gen(function* () {
+      const reads = yield* Ref.make(0);
+      yield* Effect.gen(function* () {
+        const saga = yield* setup();
+        yield* Ref.set(reads, 0);
+        const error = yield* enabled(saga.launch(request)).pipe(Effect.flip);
+        assert.equal(error.message, new Saga.OverseerLaunchError({ reason: "E1" }).message);
+        assert.equal(yield* Ref.get(reads), 3);
+        assert.deepEqual(yield* (yield* Store.OverseerStore).incompleteLaunches(), []);
+        const sql = yield* SqlClient.SqlClient;
+        assert.equal(
+          (yield* sql<{
+            count: number;
+          }>`SELECT COUNT(*) AS count FROM projection_threads WHERE thread_id <> ${observer}`)[0]
+            ?.count,
+          0,
+        );
+      }).pipe(
+        Effect.provide(
+          harness({
+            readObserverShell: (shell) =>
+              Ref.updateAndGet(reads, (n) => n + 1).pipe(
+                Effect.map((read) => {
+                  // Entry reads (readCaller and writingCaller) see residency; the locked re-read loses it.
+                  if (read < 3) return shell;
+                  const stopped = {
+                    ...shell,
+                    activeRunId: null,
+                    pendingBackgroundTasks: [
+                      {
+                        taskId: "background",
+                        kind: "subagent" as const,
+                        providerInstanceId: invocation.thread!.providerInstanceId,
+                      },
+                    ],
+                  };
+                  assert.isTrue(isLiveCallerShell(stopped, invocation.thread!.providerInstanceId));
+                  return stopped;
+                }),
+              ),
+          }),
+        ),
+      );
+    }),
 );
 
 it.effect("uses authenticated observer identity across projects", () =>

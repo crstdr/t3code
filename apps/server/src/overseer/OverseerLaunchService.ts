@@ -435,6 +435,7 @@ const make = Effect.gen(function* () {
               return yield* new OverseerLaunchError({ reason: "E4" });
             return yield* resume(existing);
           }
+          if (owner.activeRunId === null) return yield* new OverseerLaunchError({ reason: "E1" });
           yield* certified(context.scope.thread!.providerInstanceId);
           const attachments = request.attachments ?? [];
           if (attachments.some((item) => !Claims.attachmentIsPendingUpload(item)))

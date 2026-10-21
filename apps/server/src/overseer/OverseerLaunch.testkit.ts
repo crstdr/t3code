@@ -8,6 +8,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
@@ -72,6 +73,9 @@ interface Options {
   readonly scratch?: boolean;
   readonly failPreparation?: boolean;
   readonly providerDriver?: string;
+  readonly readObserverShell?: (
+    shell: OrchestrationV2ThreadShell,
+  ) => Effect.Effect<OrchestrationV2ThreadShell>;
 }
 
 export function harness(options: Options = {}) {
@@ -209,6 +213,16 @@ export function harness(options: Options = {}) {
       const sql = yield* SqlClient.SqlClient;
       return {
         ...service,
+        getThreadShell: (id: ThreadId) =>
+          service
+            .getThreadShell(id)
+            .pipe(
+              Effect.flatMap((shell) =>
+                id === observer && shell && options.readObserverShell
+                  ? options.readObserverShell(shell)
+                  : Effect.succeed(shell),
+              ),
+            ),
         dispatch: (command: Parameters<typeof service.dispatch>[0]) =>
           service
             .dispatch(command)
