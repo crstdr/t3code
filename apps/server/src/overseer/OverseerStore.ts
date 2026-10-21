@@ -369,17 +369,13 @@ const make = Effect.gen(function* () {
           if (endpoints.length === 0)
             return yield* new OverseerConflict({ reason: "endpoint_unavailable" });
           yield* sql`INSERT INTO overseer_mailboxes(observer_thread_id) VALUES (${input.observerThreadId}) ON CONFLICT DO NOTHING`;
-          yield* sql`INSERT INTO overseer_links (
+          const rows = yield* sql<LinkRow>`INSERT INTO overseer_links (
           link_id, observer_thread_id, observer_project_id, target_thread_id, target_project_id,
           client_request_id, fingerprint, launch_command_id, launch_message_id, launch_input_json
         ) VALUES (${input.linkId}, ${input.observerThreadId}, ${input.observerProjectId}, ${input.targetThreadId},
           ${input.targetProjectId}, ${input.clientRequestId}, ${input.fingerprint}, ${input.launchCommandId},
-          ${input.launchMessageId}, ${input.launchInputJson}) ON CONFLICT(observer_thread_id, client_request_id) DO NOTHING`;
-          const row = (yield* sql<LinkRow>`SELECT * FROM overseer_links
-          WHERE observer_thread_id = ${input.observerThreadId} AND client_request_id = ${input.clientRequestId}`)[0]!;
-          if (row.fingerprint !== input.fingerprint)
-            return yield* new OverseerConflict({ reason: "retry_input" });
-          return row;
+          ${input.launchMessageId}, ${input.launchInputJson}) RETURNING *`;
+          return rows[0]!;
         }),
       );
     }),
@@ -400,8 +396,11 @@ const make = Effect.gen(function* () {
       return yield* execute(
         "linksForEndpoint",
         sql<LinkRow>`SELECT * FROM overseer_links
-        WHERE state = 'active' AND (observer_thread_id = ${threadId} OR target_thread_id = ${threadId})
-          AND link_id > ${after} ORDER BY link_id LIMIT ${pageSize(limit)}`,
+        WHERE state = 'active' AND observer_thread_id = ${threadId} AND link_id > ${after}
+        UNION ALL
+        SELECT * FROM overseer_links
+        WHERE state = 'active' AND target_thread_id = ${threadId} AND link_id > ${after}
+        ORDER BY link_id LIMIT ${pageSize(limit)}`,
       );
     }),
     incompleteLaunches: Effect.fn("OverseerStore.incompleteLaunches")(function* (

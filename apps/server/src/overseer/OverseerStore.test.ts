@@ -1151,115 +1151,147 @@ it.effect.each(["completion", "question"] as const)(
     }).pipe(Effect.provide(layerTest)),
 );
 
-it.effect("uses bounded indexed production queries with 300 unrelated threads and ten links", () =>
-  Effect.gen(function* () {
-    const store = yield* setup();
-    const sql = yield* SqlClient.SqlClient;
-    for (let index = 0; index < 300; index++)
-      yield* seedThread(ThreadId.make(`unrelated-${index}`), targetProject);
-    for (let index = 0; index < 10; index++) {
-      const input = yield* launch(String(index));
-      yield* record(input.linkId, `source-${index}`, index);
-    }
-    const queries: Array<ReturnType<Statement.Statement<unknown>["compile"]>> = [];
-    const capture: Statement.Transformer = (statement) => {
-      const compiled = statement.compile();
-      if (/^\s*(?:SELECT|UPDATE|INSERT|DELETE)\b/i.test(compiled[0])) queries.push(compiled);
-      return Effect.succeed(statement);
-    };
-    yield* Effect.gen(function* () {
-      assert.equal((yield* store.linksForEndpoint(observer, "", 3)).length, 3);
-      assert.equal((yield* store.linksForEndpoint(ThreadId.make("target-0"))).length, 1);
-      assert.equal((yield* store.incompleteLaunches()).length, 0);
-      yield* store.reserve(reservation("reserved"));
-      assert.equal((yield* store.incompleteLaunches("", 1)).length, 1);
-      yield* store.recoveryMailboxes("", 2);
-      yield* record("link-0", "candidate", 11, false);
-      yield* store.pendingCandidates(observer, undefined, 1);
-      const attempt = yield* freeze();
-      yield* store.bindAttempt(
-        attempt.messageId,
-        RunId.make("query-run"),
-        RunAttemptId.make("query-attempt"),
-      );
-      assert.equal((yield* store.batchEntries(observer, attempt.batchNumber)).length, 8);
-      yield* store.pendingAttempt(observer);
-      yield* store.attemptForMessage(attempt.messageId);
-      yield* store.attemptsForRun(RunId.make("query-run"));
-      yield* store.acceptAttempt(attempt.messageId, attempt.epoch);
-      yield* store.unlink("link-0");
-      yield* store.projectDeleted(targetProject);
-      yield* store.pruneClosed;
-    }).pipe(Effect.provideService(Statement.CurrentTransformer, capture));
-    const plans: Array<{ readonly query: string; readonly details: string }> = [];
-    for (const [query, parameters] of queries) {
-      const rows = yield* sql.unsafe<{ readonly detail: string }>(
-        `EXPLAIN QUERY PLAN ${query}`,
-        parameters,
-      );
-      const details = rows.map((row) => row.detail).join("\n");
-      assert.notMatch(
-        details,
-        /SCAN (?:worker|hub|t|r|p|destination|o|l|b|orchestration_v2_projection_threads|orchestration_v2_projection_runtime_requests|projection_projects)(?:\s|$)/,
-      );
-      assert.notMatch(details, /SCAN overseer_\w+(?:\n|$)/);
-      if (query.includes("UNION SELECT observer_thread_id FROM overseer_mailboxes")) {
-        for (const index of [
-          "overseer_mailboxes_dirty_idx",
-          "overseer_mailboxes_held_idx",
-          "overseer_attempts_pending_idx",
-        ])
-          assert.include(details, index);
+it.effect(
+  "uses bounded production plans with 300 unrelated threads, ten source links and large mixed fanout",
+  () =>
+    Effect.gen(function* () {
+      const store = yield* setup();
+      const sql = yield* SqlClient.SqlClient;
+      for (let index = 0; index < 300; index++)
+        yield* seedThread(ThreadId.make(`unrelated-${index}`), targetProject);
+      for (let index = 0; index < 10; index++) {
+        const input = yield* launch(String(index));
+        yield* record(input.linkId, `source-${index}`, index);
       }
-      if (query.includes("AND observer_project_id =") && query.includes("UNION")) {
-        assert.include(
-          details,
-          "overseer_links_observer_project_idx (observer_project_id=? AND state=?)",
+      const fanout = ThreadId.make("fanout");
+      const incoming = {
+        ...reservation("incoming"),
+        linkId: "link-fanout-0500-mid",
+        targetThreadId: fanout,
+        targetProjectId: observerProject,
+      };
+      yield* store.reserve(incoming);
+      yield* seedThread(fanout, observerProject);
+      yield* store.acceptLaunch(incoming.linkId);
+      for (let index = 0; index < 1000; index++) {
+        const input = {
+          ...reservation(`fanout-${String(index).padStart(4, "0")}`),
+          observerThreadId: fanout,
+          targetProjectId: observerProject,
+        };
+        yield* store.reserve(input);
+        yield* seedThread(input.targetThreadId, observerProject);
+        yield* store.acceptLaunch(input.linkId);
+      }
+      const queries: Array<ReturnType<Statement.Statement<unknown>["compile"]>> = [];
+      const capture: Statement.Transformer = (statement) => {
+        const compiled = statement.compile();
+        if (/^\s*(?:SELECT|UPDATE|INSERT|DELETE)\b/i.test(compiled[0])) queries.push(compiled);
+        return Effect.succeed(statement);
+      };
+      yield* Effect.gen(function* () {
+        assert.deepEqual(
+          (yield* store.linksForEndpoint(fanout, "link-fanout-0499", 3)).map((row) => row.link_id),
+          ["link-fanout-0500", "link-fanout-0500-mid", "link-fanout-0501"],
         );
-        assert.include(details, "overseer_links_target_project_idx (target_project_id=?)");
+        assert.equal((yield* store.linksForEndpoint(observer, "", 3)).length, 3);
+        assert.equal((yield* store.linksForEndpoint(ThreadId.make("target-0"))).length, 1);
+        assert.equal((yield* store.incompleteLaunches()).length, 0);
+        yield* store.reserve(reservation("reserved"));
+        assert.equal((yield* store.incompleteLaunches("", 1)).length, 1);
+        yield* store.recoveryMailboxes("", 2);
+        yield* record("link-0", "candidate", 11, false);
+        yield* store.pendingCandidates(observer, undefined, 1);
+        const attempt = yield* freeze();
+        yield* store.bindAttempt(
+          attempt.messageId,
+          RunId.make("query-run"),
+          RunAttemptId.make("query-attempt"),
+        );
+        assert.equal((yield* store.batchEntries(observer, attempt.batchNumber)).length, 8);
+        yield* store.pendingAttempt(observer);
+        yield* store.attemptForMessage(attempt.messageId);
+        yield* store.attemptsForRun(RunId.make("query-run"));
+        yield* store.acceptAttempt(attempt.messageId, attempt.epoch);
+        yield* store.unlink("link-0");
+        yield* store.projectDeleted(targetProject);
+        yield* store.pruneClosed;
+      }).pipe(Effect.provideService(Statement.CurrentTransformer, capture));
+      const plans: Array<{ readonly query: string; readonly details: string }> = [];
+      for (const [query, parameters] of queries) {
+        const rows = yield* sql.unsafe<{ readonly detail: string }>(
+          `EXPLAIN QUERY PLAN ${query}`,
+          parameters,
+        );
+        const details = rows.map((row) => row.detail).join("\n");
+        assert.notMatch(
+          details,
+          /SCAN (?:worker|hub|t|r|p|destination|o|l|b|orchestration_v2_projection_threads|orchestration_v2_projection_runtime_requests|projection_projects)(?:\s|$)/,
+        );
+        assert.notMatch(details, /SCAN overseer_\w+(?:\n|$)/);
+        if (query.includes("UNION SELECT observer_thread_id FROM overseer_mailboxes")) {
+          for (const index of [
+            "overseer_mailboxes_dirty_idx",
+            "overseer_mailboxes_held_idx",
+            "overseer_attempts_pending_idx",
+          ])
+            assert.include(details, index);
+        }
+        if (query.includes("AND observer_project_id =") && query.includes("UNION")) {
+          assert.include(
+            details,
+            "overseer_links_observer_project_idx (observer_project_id=? AND state=?)",
+          );
+          assert.include(details, "overseer_links_target_project_idx (target_project_id=?)");
+        }
+        if (query.includes("UNION ALL") && query.includes("target_thread_id =")) {
+          assert.include(details, "MERGE (UNION ALL)");
+          assert.include(details, "overseer_links_observer_idx");
+          assert.match(details, /SEARCH overseer_links USING INDEX \S+ \(target_thread_id=\?\)/);
+          assert.notInclude(details, "USE TEMP B-TREE");
+        }
+        if (query.includes("ORDER BY source_sequence, source_id, link_id"))
+          assert.include(details, "overseer_occurrences_candidates_idx");
+        plans.push({ query, details });
       }
-      if (query.includes("ORDER BY source_sequence, source_id, link_id"))
-        assert.include(details, "overseer_occurrences_candidates_idx");
-      plans.push({ query, details });
-    }
-    const combined = plans.map((plan) => plan.details).join("\n");
-    for (const index of [
-      "overseer_links_observer_idx",
-      "overseer_links_observer_project_idx",
-      "overseer_links_target_project_idx",
-      "overseer_links_launch_idx",
-      "overseer_links_closed_idx",
-      "overseer_occurrences_pending_idx",
-      "overseer_occurrences_candidates_idx",
-      "overseer_occurrences_batch_idx",
-      "overseer_mailboxes_dirty_idx",
-      "overseer_mailboxes_held_idx",
-      "overseer_attempts_pending_idx",
-    ])
-      assert.include(combined, index);
-    assert.match(combined, /SEARCH overseer_attempts USING INDEX \S+ \(message_id=\?\)/);
-    assert.match(
-      combined,
-      /SEARCH overseer_attempts USING INDEX \S+ \(run_id=\? AND message_id>\?\)/,
-    );
-    assert.match(
-      combined,
-      /SEARCH overseer_links USING INDEX \S+ \(observer_thread_id=\? AND client_request_id=\?\)/,
-    );
-    assert.include(
-      combined,
-      "SEARCH overseer_links USING COVERING INDEX overseer_links_observer_project_idx (observer_project_id=? AND state=?)",
-    );
-    assert.include(
-      combined,
-      "SEARCH overseer_links USING COVERING INDEX overseer_links_target_project_idx (target_project_id=?)",
-    );
-    const pending = plans.find((plan) => plan.query.includes("ORDER BY o.source_sequence"));
-    assert.isDefined(pending);
-    assert.include(
-      pending!.details,
-      "SEARCH o USING INDEX overseer_occurrences_pending_idx (observer_thread_id=?)",
-    );
-    assert.notInclude(pending!.details, "USE TEMP B-TREE FOR ORDER BY");
-  }).pipe(Effect.provide(layerTest)),
+      const combined = plans.map((plan) => plan.details).join("\n");
+      for (const index of [
+        "overseer_links_observer_idx",
+        "overseer_links_observer_project_idx",
+        "overseer_links_target_project_idx",
+        "overseer_links_launch_idx",
+        "overseer_links_closed_idx",
+        "overseer_occurrences_pending_idx",
+        "overseer_occurrences_candidates_idx",
+        "overseer_occurrences_batch_idx",
+        "overseer_mailboxes_dirty_idx",
+        "overseer_mailboxes_held_idx",
+        "overseer_attempts_pending_idx",
+      ])
+        assert.include(combined, index);
+      assert.match(combined, /SEARCH overseer_attempts USING INDEX \S+ \(message_id=\?\)/);
+      assert.match(
+        combined,
+        /SEARCH overseer_attempts USING INDEX \S+ \(run_id=\? AND message_id>\?\)/,
+      );
+      assert.match(
+        combined,
+        /SEARCH overseer_links USING INDEX \S+ \(observer_thread_id=\? AND client_request_id=\?\)/,
+      );
+      assert.include(
+        combined,
+        "SEARCH overseer_links USING COVERING INDEX overseer_links_observer_project_idx (observer_project_id=? AND state=?)",
+      );
+      assert.include(
+        combined,
+        "SEARCH overseer_links USING COVERING INDEX overseer_links_target_project_idx (target_project_id=?)",
+      );
+      const pending = plans.find((plan) => plan.query.includes("ORDER BY o.source_sequence"));
+      assert.isDefined(pending);
+      assert.include(
+        pending!.details,
+        "SEARCH o USING INDEX overseer_occurrences_pending_idx (observer_thread_id=?)",
+      );
+      assert.notInclude(pending!.details, "USE TEMP B-TREE FOR ORDER BY");
+    }).pipe(Effect.provide(layerTest)),
 );
