@@ -86,7 +86,7 @@ const refuseReadOnlyClient = McpInvocationContext.McpInvocationContext.pipe(
   ),
 );
 
-const writingCaller = refuseReadOnlyClient.pipe(
+export const writingCaller = refuseReadOnlyClient.pipe(
   Effect.andThen(loadCaller()),
   Effect.tap(assertLiveCaller),
 );
@@ -157,7 +157,7 @@ export const writesThreads = <P, A, E, R>(
     }),
   );
 
-const escalationDenied = (refusal: DispatchModeRefusal) =>
+export const escalationDenied = (refusal: DispatchModeRefusal) =>
   new OrchestratorMcpFailure({
     code:
       refusal.mode === "runtime"

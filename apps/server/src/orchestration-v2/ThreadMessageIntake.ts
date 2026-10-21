@@ -182,6 +182,7 @@ export const sendToThread = Effect.fn("ThreadMessageIntake.sendToThread")(functi
 
 export const launchThread = Effect.fn("ThreadMessageIntake.launchThread")(function* (
   input: ThreadLaunch.ThreadLaunchInput,
+  options: { readonly recoverReservedClaims?: boolean } = {},
 ) {
   const launches = yield* ThreadLaunch.ThreadLaunchService;
   yield* AttachmentClaims.validateAttachmentLimits(input.initialMessage?.attachments ?? []);
@@ -196,6 +197,7 @@ export const launchThread = Effect.fn("ThreadMessageIntake.launchThread")(functi
   const claimed = yield* AttachmentClaims.claimPendingAttachments({
     threadId: input.threadId,
     attachments: input.initialMessage.attachments,
+    ...options,
   });
   return yield* launches
     .launch({
@@ -222,6 +224,7 @@ export const launchThread = Effect.fn("ThreadMessageIntake.launchThread")(functi
         ),
       ),
       Effect.tapError((error) => {
+        if (options.recoverReservedClaims === true) return Effect.void;
         if (error._tag === "ThreadManagementProviderInstanceDisabledError") {
           return AttachmentClaims.releaseClaimedAttachments(claimed.claimedPaths);
         }
