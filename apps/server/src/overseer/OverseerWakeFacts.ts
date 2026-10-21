@@ -11,6 +11,7 @@ import {
   pendingBackgroundTurnItems,
 } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as Context from "effect/Context";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
@@ -95,6 +96,7 @@ export class OverseerWakeFacts extends Context.Service<
     readonly awaitAvailable: Effect.Effect<void>;
     // No new occurrence: reconcile a durable candidate after an eventless continuation disposition.
     readonly continuationSettled: (sourceRunId: RunId) => Result<void>;
+    readonly reconcileObserver: (observer: ThreadId) => Result<void>;
     readonly completionOutcome: (linkId: string, rootRunId: string) => Result<Outcome | undefined>;
   }
 >()("t3/overseer/OverseerWakeFacts") {}
@@ -455,7 +457,19 @@ const make = Effect.gen(function* () {
         events.some(
           ({ event }) => event.type === "message.updated" && explicitMessage(event.payload),
         ))
-        ? notify
+        ? notify.pipe(
+            Effect.andThen(
+              transport.warnUnconfirmed(events, context?.commandType).pipe(
+                Effect.catchCause((cause) =>
+                  Cause.hasInterruptsOnly(cause)
+                    ? Effect.interrupt
+                    : Effect.logWarning("Overseer receipt warning could not be persisted", {
+                        cause,
+                      }),
+                ),
+              ),
+            ),
+          )
         : Effect.void,
     notifyProjectEvent: (event) => (event.type === "project.deleted" ? notify : Effect.void),
     awaitAvailable: Queue.take(available),
@@ -480,6 +494,56 @@ const make = Effect.gen(function* () {
         yield* notify;
       },
     ),
+    reconcileObserver: Effect.fn("OverseerWakeFacts.reconcileObserver")(function* (observer) {
+      if (!(yield* OverseerFeature.Enabled)) return;
+      yield* wrap(
+        "reconcile-observer",
+        gate.commit(
+          sql.withTransaction(
+            Effect.gen(function* () {
+              for (const ready of [0, 1]) {
+                let cursor = { sequence: -1, kind: "", source: "", link: "" };
+                for (;;) {
+                  type Pending = {
+                    readonly link_id: string;
+                    readonly kind: "completion" | "question";
+                    readonly source_id: string;
+                    readonly source_sequence: number;
+                  };
+                  const rows =
+                    ready === 0
+                      ? yield* sql<Pending>`SELECT link_id, kind, source_id, source_sequence FROM overseer_occurrences
+                  WHERE observer_thread_id = ${observer} AND disposition = 'pending' AND ready = 0
+                    AND (source_sequence, source_id, link_id) > (${cursor.sequence}, ${cursor.source}, ${cursor.link})
+                  ORDER BY source_sequence, source_id, link_id LIMIT 100`
+                      : yield* sql<Pending>`SELECT link_id, kind, source_id, source_sequence FROM overseer_occurrences
+                  WHERE observer_thread_id = ${observer} AND disposition = 'pending' AND ready = 1
+                    AND (source_sequence, kind, source_id, link_id) > (${cursor.sequence}, ${cursor.kind}, ${cursor.source}, ${cursor.link})
+                  ORDER BY source_sequence, kind, source_id, link_id LIMIT 100`;
+                  if (rows.length === 0) break;
+                  for (const row of rows) {
+                    if (row.kind === "completion") yield* reconcile(row.link_id, row.source_id);
+                    else
+                      yield* store.refreshQuestion({
+                        linkId: row.link_id,
+                        kind: "question",
+                        sourceId: row.source_id,
+                      });
+                  }
+                  const last = rows[rows.length - 1]!;
+                  cursor = {
+                    sequence: last.source_sequence,
+                    kind: last.kind,
+                    source: last.source_id,
+                    link: last.link_id,
+                  };
+                }
+              }
+            }),
+          ),
+        ),
+      );
+    }),
     completionOutcome: (linkId, rootRunId) =>
       wrap("completion-outcome", completionOutcome(linkId, rootRunId)),
   });

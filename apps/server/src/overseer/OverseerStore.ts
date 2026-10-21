@@ -87,6 +87,7 @@ type MailboxRow = {
   readonly hold_reason: HoldReason | null;
   readonly hold_mask: number;
   readonly flush_id: string | null;
+  readonly retry_message_id: string | null;
 };
 type OccurrenceRow = {
   readonly link_id: string;
@@ -145,8 +146,14 @@ export class OverseerStore extends Context.Service<
     readonly recoveryMailboxes: (
       after?: string,
       limit?: number,
+      includeActiveLinks?: boolean,
     ) => StoreResult<ReadonlyArray<string>>;
     readonly record: (input: RecordInput) => StoreResult<boolean>;
+    readonly closeObligation: (
+      linkId: string,
+      reason: "endpoint_deleted" | "project_deleted",
+    ) => StoreResult<boolean>;
+    readonly refreshQuestion: (key: OccurrenceKey) => StoreResult<void>;
     readonly settleCompletion: (linkId: string, sourceId: string) => StoreResult<boolean>;
     readonly deferCompletion: (linkId: string, sourceId: string) => StoreResult<boolean>;
     readonly withdraw: (key: OccurrenceKey) => StoreResult<boolean>;
@@ -347,7 +354,7 @@ const make = Effect.gen(function* () {
   });
   const retireMailbox = Effect.fn("OverseerStore.retireMailbox")(function* (observer: string) {
     yield* sql`UPDATE overseer_transports SET phase = 'retired' WHERE observer_thread_id = ${observer} AND phase <> 'received'`;
-    yield* sql`UPDATE overseer_mailboxes SET epoch = epoch + 1, hold_mask = 0, processed_revision = revision
+    yield* sql`UPDATE overseer_mailboxes SET epoch = epoch + 1, hold_mask = 0, retry_message_id = NULL, processed_revision = revision
       WHERE observer_thread_id = ${observer}`;
   });
   const attemptForMessage = Effect.fn("OverseerStore.attemptForMessage")(function* (
@@ -432,18 +439,25 @@ const make = Effect.gen(function* () {
     ) {
       return yield* execute(
         "incompleteLaunches",
-        sql<LinkRow>`SELECT * FROM overseer_links
+        sql<LinkRow>`SELECT * FROM overseer_links INDEXED BY overseer_links_launch_idx
         WHERE state = 'active' AND launch_accepted = 0 AND link_id > ${after} ORDER BY link_id LIMIT ${pageSize(limit)}`,
       );
     }),
     mailbox: (observer) => execute("mailbox", mailbox(observer)),
-    recoveryMailboxes: Effect.fn("OverseerStore.recoveryMailboxes")(function* (after = "", limit) {
+    recoveryMailboxes: Effect.fn("OverseerStore.recoveryMailboxes")(function* (
+      after = "",
+      limit,
+      includeActiveLinks = false,
+    ) {
       const rows = yield* execute(
         "recoveryMailboxes",
         sql<{ readonly observer_thread_id: string }>`
         SELECT observer_thread_id FROM overseer_mailboxes WHERE revision > processed_revision AND observer_thread_id > ${after}
         UNION SELECT observer_thread_id FROM overseer_mailboxes WHERE hold_mask <> 0 AND observer_thread_id > ${after}
-        UNION SELECT observer_thread_id FROM overseer_attempts WHERE state = 'pending' AND observer_thread_id > ${after}
+          UNION SELECT observer_thread_id FROM overseer_attempts WHERE state = 'pending' AND observer_thread_id > ${after}
+          UNION SELECT observer_thread_id FROM overseer_transports WHERE phase IN ('prepared', 'queued', 'frozen', 'submitted') AND observer_thread_id > ${after}
+          UNION SELECT observer_thread_id FROM overseer_mailboxes WHERE retry_message_id IS NOT NULL AND observer_thread_id > ${after}
+          UNION SELECT observer_thread_id FROM overseer_links WHERE ${includeActiveLinks ? 1 : 0} AND state = 'active' AND observer_thread_id > ${after}
         ORDER BY observer_thread_id LIMIT ${pageSize(limit)}`,
       );
       return rows.map((row) => row.observer_thread_id);
@@ -749,8 +763,11 @@ const make = Effect.gen(function* () {
             readonly source_id: string;
           }>`SELECT json_extract(m.value, '$.linkId') AS link_id,
             json_extract(m.value, '$.kind') AS kind, json_extract(m.value, '$.sourceId') AS source_id
-            FROM overseer_transports t, json_each(t.members_json) m
-            WHERE t.observer_thread_id = ${observer} AND t.phase IN ('prepared', 'queued', 'frozen', 'submitted')`;
+            FROM (SELECT members_json FROM overseer_transports
+              WHERE observer_thread_id = ${observer} AND phase IN ('prepared', 'queued', 'frozen', 'submitted')
+              UNION SELECT members_json FROM overseer_transports WHERE message_id =
+                (SELECT retry_message_id FROM overseer_mailboxes WHERE observer_thread_id = ${observer})) t,
+              json_each(t.members_json) m`;
           for (const member of snapshot)
             yield* sql`UPDATE overseer_occurrences SET disposition = 'suppressed', batch_number = NULL
               WHERE link_id = ${member.link_id} AND kind = ${member.kind} AND source_id = ${member.source_id}
@@ -761,7 +778,7 @@ const make = Effect.gen(function* () {
             yield* sql<BatchRow>`SELECT * FROM overseer_batches WHERE observer_thread_id = ${observer} AND state IN ('queued', 'frozen')`;
           for (const batch of batches)
             yield* disposeBatch(observer, batch.batch_number, "stop", true);
-          yield* sql`UPDATE overseer_mailboxes SET epoch = epoch + 1, revision = revision + 1, hold_mask = hold_mask | ${holdBits.stop} WHERE observer_thread_id = ${observer}`;
+          yield* sql`UPDATE overseer_mailboxes SET epoch = epoch + 1, revision = revision + 1, retry_message_id = NULL, hold_mask = hold_mask | ${holdBits.stop} WHERE observer_thread_id = ${observer}`;
           yield* OverseerFlush.schedule(observer).pipe(
             Effect.provideService(SqlClient.SqlClient, sql),
           );
@@ -810,6 +827,17 @@ const make = Effect.gen(function* () {
             );
         }),
       ).pipe(Effect.asVoid);
+    }),
+    closeObligation: (linkId, reason) => transaction("closeObligation", closeLink(linkId, reason)),
+    refreshQuestion: Effect.fn("OverseerStore.refreshQuestion")(function* (key) {
+      yield* transaction(
+        "refreshQuestion",
+        Effect.gen(function* () {
+          const rows = yield* sql<OccurrenceRow>`SELECT * FROM overseer_occurrences
+          WHERE link_id = ${key.linkId} AND kind = ${key.kind} AND source_id = ${key.sourceId} AND disposition = 'pending'`;
+          if (rows[0]) yield* reconcileQuestions(rows[0].observer_thread_id, rows);
+        }),
+      );
     }),
     unlink: Effect.fn("OverseerStore.unlink")((linkId) =>
       transaction("unlink", closeLink(linkId, "unlink")),

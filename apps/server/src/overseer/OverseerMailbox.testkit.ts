@@ -56,10 +56,8 @@ const stores = Layer.mergeAll(
   Positions.layer,
   Outbox.layer,
 );
-export const layer = Sink.layerFromStores.pipe(
-  Layer.provideMerge(stores),
-  Layer.provideMerge(Sqlite.layerMemory),
-);
+export const layerServices = Sink.layerFromStores.pipe(Layer.provideMerge(stores));
+export const layer = layerServices.pipe(Layer.provideMerge(Sqlite.layerMemory));
 
 const thread = (id: ThreadId): OrchestrationV2AppThread => ({
   id,
@@ -126,7 +124,10 @@ type NewEvent = OrchestrationV2DomainEvent extends infer E
     : never
   : never;
 
-export const setup = Effect.fn("test.overseerMailbox.setup")(function* () {
+export const setup = Effect.fn("test.overseerMailbox.setup")(function* (options?: {
+  readonly seed?: boolean;
+  readonly eventPrefix?: string;
+}) {
   const sql = yield* SqlClient.SqlClient;
   const store = yield* Store.OverseerStore;
   const sink = yield* Sink.EventSinkV2;
@@ -142,12 +143,12 @@ export const setup = Effect.fn("test.overseerMailbox.setup")(function* () {
   ) {
     const decoded = events.map((event) => ({
       ...event,
-      id: EventId.make(`event:${++serial}`),
+      id: EventId.make(`event:${options?.eventPrefix ?? ""}${++serial}`),
       occurredAt: now,
     }));
     if (commandType)
       return (yield* sink.commitCommand({
-        commandId: CommandId.make(`command:${++serial}`),
+        commandId: CommandId.make(`command:${options?.eventPrefix ?? ""}${++serial}`),
         threadId,
         commandType,
         acceptedAt: now,
@@ -156,22 +157,24 @@ export const setup = Effect.fn("test.overseerMailbox.setup")(function* () {
       })).storedEvents;
     return yield* sink.write({ events: decoded });
   });
-  yield* sql`INSERT INTO projection_projects(project_id, title, workspace_root, scripts_json, created_at, updated_at)
+  if (options?.seed !== false) {
+    yield* sql`INSERT INTO projection_projects(project_id, title, workspace_root, scripts_json, created_at, updated_at)
     VALUES (${project}, 'test', '/isolated', '[]', ${DateTime.formatIso(now)}, ${DateTime.formatIso(now)})`;
-  yield* write([{ type: "thread.created", threadId: observer, payload: thread(observer) }]);
-  yield* store.reserve({
-    linkId: "link",
-    observerThreadId: observer,
-    observerProjectId: project,
-    targetThreadId: target,
-    targetProjectId: project,
-    clientRequestId: "retry",
-    fingerprint: "input",
-    launchCommandId: CommandId.make("launch"),
-    launchMessageId: MessageId.make("initial"),
-    launchInputJson: "{}",
-  });
-  yield* write([{ type: "thread.created", threadId: target, payload: thread(target) }]);
+    yield* write([{ type: "thread.created", threadId: observer, payload: thread(observer) }]);
+    yield* store.reserve({
+      linkId: "link",
+      observerThreadId: observer,
+      observerProjectId: project,
+      targetThreadId: target,
+      targetProjectId: project,
+      clientRequestId: "retry",
+      fingerprint: "input",
+      launchCommandId: CommandId.make("launch"),
+      launchMessageId: MessageId.make("initial"),
+      launchInputJson: "{}",
+    });
+    yield* write([{ type: "thread.created", threadId: target, payload: thread(target) }]);
+  }
   const start = Effect.fn("test.overseerMailbox.start")(function* (ordinal: number) {
     const work = run(ordinal);
     yield* write([

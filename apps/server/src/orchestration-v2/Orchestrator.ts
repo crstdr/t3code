@@ -110,6 +110,7 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { resolveProjectProviderInstanceEnabled } from "@t3tools/contracts";
 import * as OverseerMailbox from "../overseer/OverseerMailbox.ts";
+import * as OverseerContinuation from "../overseer/OverseerContinuation.ts";
 import * as OverseerFeature from "../overseer/OverseerFeature.ts";
 import { OverseerNoticeGrant } from "../overseer/OverseerNoticeGrant.ts";
 import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimit.ts";
@@ -941,6 +942,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const threadForkService = yield* ThreadForkServiceV2;
   const threadDispatch = yield* ThreadCommandExecutor.ThreadCommandExecutor;
   const overseerMailbox = yield* Effect.serviceOption(OverseerMailbox.OverseerMailbox);
+  const continuationOwnership = yield* OverseerContinuation.capture;
 
   const mapDispatchError =
     (command: OrchestrationV2ServerCommand) =>
@@ -10920,6 +10922,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     )
       return;
     const progress = delegatedTaskProgress(childControls);
+    if (
+      progress.resultRun &&
+      (yield* continuationOwnership
+        .disposition({ runId: progress.resultRun.id, messageId: progress.resultRun.userMessageId })
+        .pipe(Effect.orDie)) === "mailbox_owned"
+    )
+      return;
     const parent = yield* projectionStore.getThreadRecords(parentThreadId, [
       "subagents",
       "contextTransfers",

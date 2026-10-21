@@ -57,15 +57,50 @@ const make = Effect.gen(function* () {
       function* (input, dispatch) {
         if (!(yield* OverseerFeature.Enabled)) return;
         const observer = input.observerThreadId;
-        const box = yield* storage(store.mailbox(observer));
+        let box = yield* storage(store.mailbox(observer));
         if (!box || box.flush_id !== `effect:overseer-flush:${input.generation}`) return;
         const suspended = yield* storage(sql`SELECT 1 FROM orchestration_v2_projection_threads t
         WHERE t.thread_id = ${observer} AND (t.archived_at IS NOT NULL OR t.deleted_at IS NOT NULL
           OR json_extract(t.payload_json, '$.snoozedUntil') IS NOT NULL
           OR EXISTS (SELECT 1 FROM orchestration_v2_projection_runs r WHERE r.thread_id = ${observer}
             AND r.status = 'queued' AND json_extract(r.payload_json, '$.queueHeld') = 1))`);
+        let current = yield* storage(transport.open(observer));
+        // Withdrawal and finished bindings can be cleaned without resuming a
+        // held queue. Only private queued input is cancelled, never its followers.
+        if (current && (current.phase === "prepared" || current.phase === "queued")) {
+          const bound = (yield* storage(sql<{
+            readonly run_id: string | null;
+            readonly status: string | null;
+          }>`
+            SELECT r.run_id, r.status FROM orchestration_v2_projection_messages m
+            LEFT JOIN orchestration_v2_projection_runs r ON r.run_id = m.run_id WHERE m.message_id = ${current.message_id}`))[0];
+          if (
+            (bound?.status &&
+              ["completed", "failed", "cancelled", "interrupted"].includes(bound.status)) ||
+            ((suspended.length > 0 || box.hold_mask !== 0) &&
+              !(yield* storage(store.batchDispatchable(observer, current.batch_number))))
+          ) {
+            if (bound?.status === "queued" && bound.run_id)
+              yield* dispatch({
+                type: "queued-run.cancel",
+                threadId: observer,
+                runId: RunId.make(bound.run_id),
+                commandId: CommandId.make(`command:overseer-retire:${yield* storage(freshId)}`),
+              }).pipe(
+                Effect.provideService(OverseerNoticeGrant, {
+                  messageId: MessageId.make(current.message_id),
+                  queued: true,
+                  retiring: true,
+                }),
+              );
+            yield* storage(transport.retire(MessageId.make(current.message_id)));
+            yield* storage(store.releaseUnsentBatch(observer, current.batch_number));
+            current = undefined;
+            box = yield* storage(store.mailbox(observer));
+            if (!box) return;
+          }
+        }
         if (suspended.length > 0 || box.hold_mask !== 0) return;
-        const current = yield* storage(transport.open(observer));
         // Submitted input is a process-bound receipt barrier even after a source
         // invalidation disposed its batch. Never loop or resend surviving members.
         if (current?.phase === "submitted") return;
@@ -76,6 +111,9 @@ const make = Effect.gen(function* () {
           yield* storage(transport.retire(MessageId.make(current.message_id)));
           return;
         }
+        if (!(yield* storage(transport.restoreRetry(observer)))) return;
+        box = yield* storage(store.mailbox(observer));
+        if (!box) return;
         const fence = { observerThreadId: observer, epoch: box.epoch, revision: box.revision };
         const staged = yield* storage(store.stageBatch(fence));
         if (staged.state !== "ready") {
@@ -102,7 +140,6 @@ const make = Effect.gen(function* () {
           if (staged.state === "idle") yield* storage(store.checkpoint(fence));
           return;
         }
-        if (staged.batch.state === "frozen") return; // Process-loss ownership is reconciled by 3c.
         const members = yield* storage(store.batchEntries(observer, staged.batch.batch_number));
         const entries: Array<WakeEntry> = [];
         for (const member of members) {
@@ -125,6 +162,13 @@ const make = Effect.gen(function* () {
         }
         const batchId = `${observer}:${staged.batch.batch_number}`;
         const rendered = renderWake(batchId, entries);
+        if (staged.batch.state === "frozen" && (!rendered || rendered.count !== members.length)) {
+          yield* Effect.logWarning("Overseer frozen retry no longer fits its envelope", {
+            observerThreadId: observer,
+            batchId,
+          });
+          return;
+        }
         if (!rendered) {
           yield* Effect.logWarning("Oversight wake identity exceeds envelope budget", {
             observer,

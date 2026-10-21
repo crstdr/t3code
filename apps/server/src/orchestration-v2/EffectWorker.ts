@@ -30,6 +30,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as OverseerWakeFacts from "../overseer/OverseerWakeFacts.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as OverseerFeature from "../overseer/OverseerFeature.ts";
+import * as OverseerContinuation from "../overseer/OverseerContinuation.ts";
 import { continueRestartedRun } from "./RestartContinuation.ts";
 
 export class OrchestrationEffectExecutionError extends Schema.TaggedError<OrchestrationEffectExecutionError>()(
@@ -97,6 +98,7 @@ export const layerExecutor: Layer.Layer<
       yield* ThreadTitleRegenerationService.ThreadTitleRegenerationService;
     const threads = yield* ThreadManagementService.ThreadManagementService;
     const settings = yield* ServerSettings.ServerSettingsService;
+    const continuationOwnership = yield* OverseerContinuation.capture;
     const orchestrator = yield* Effect.serviceOption(Orchestrator.OrchestratorV2);
     return OrchestrationEffectExecutorV2.of({
       execute: (effect, options) => {
@@ -125,6 +127,10 @@ export const layerExecutor: Layer.Layer<
           case "provider-runtime.continue": {
             const sourceRunId = effect.request.sourceRunId;
             return continueRestartedRun({ threadId: effect.threadId, sourceRunId }).pipe(
+              Effect.provideService(
+                OverseerContinuation.OverseerContinuation,
+                continuationOwnership,
+              ),
               Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
               Effect.provideService(ServerSettings.ServerSettingsService, settings),
               Effect.tapError(() =>

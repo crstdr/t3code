@@ -34,6 +34,7 @@ import * as EventStore from "../EventStore.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Orchestrator from "../Orchestrator.ts";
 import * as OverseerMailbox from "../../overseer/OverseerMailbox.ts";
+import * as OverseerContinuation from "../../overseer/OverseerContinuation.ts";
 import * as OverseerTransport from "../../overseer/OverseerTransport.ts";
 import * as ProjectionStore from "../ProjectionStore.ts";
 import * as ProjectStore from "../ProjectStore.ts";
@@ -461,6 +462,7 @@ export function layerWithRegistry<Error>(
     Layer.provide(
       Layer.mergeAll(
         OverseerMailbox.layer.pipe(Layer.provide(layerDatabase)),
+        OverseerContinuation.layer.pipe(Layer.provide(layerDatabase)),
         layerCheckpointServiceProvided,
         CommandPolicy.layer,
         layerContextHandoffServiceProvided,
@@ -504,6 +506,7 @@ export function layerWithRegistry<Error>(
     Layer.provide(
       Layer.mergeAll(
         layerOrchestratorProvided,
+        OverseerContinuation.layer.pipe(Layer.provide(layerDatabase)),
         layerRunFinalizationServiceProvided,
         layerCheckpointRollbackServiceProvided,
         layerProviderSessionManagerProvided,
@@ -549,6 +552,7 @@ export function layerWithRegistry<Error>(
             Layer.mergeAll(
               layerStores,
               layerEventSinkProvided,
+              OverseerContinuation.layer.pipe(Layer.provide(layerDatabase)),
               IdAllocator.layer,
               layerServerSettings,
             ),

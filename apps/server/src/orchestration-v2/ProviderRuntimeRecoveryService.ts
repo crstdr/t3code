@@ -23,6 +23,7 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { restartContinuationRun } from "./RestartContinuation.ts";
+import * as OverseerContinuation from "../overseer/OverseerContinuation.ts";
 import { isBufferedProviderNotification } from "./NotificationMailbox.ts";
 import {
   endOrphanedNativeSubagent,
@@ -174,6 +175,7 @@ export const make = Effect.gen(function* () {
   const eventSink = yield* EventSink.EventSinkV2;
   const ids = yield* IdAllocator.IdAllocatorV2;
   const outbox = yield* EffectOutbox.EffectOutboxV2;
+  const continuationOwnership = yield* OverseerContinuation.capture;
   type RecoverySession = ProjectionStore.ProjectionRuntimeRecoveryState["providerSessions"][number];
   /**
    * A session shared by several threads (one Codex app server) is stopped by the
@@ -628,16 +630,23 @@ export const make = Effect.gen(function* () {
               now,
             )
           : undefined;
-      const effects: Array<EffectOutbox.PendingOrchestrationEffectV2> = continuationRun
-        ? [
-            {
-              id: `effect:restart-continuation:${continuationRun.id}`,
-              commandId,
-              threadId: projection.thread.id,
-              request: { type: "provider-runtime.continue", sourceRunId: continuationRun.id },
-            },
-          ]
-        : [];
+      const effects: Array<EffectOutbox.PendingOrchestrationEffectV2> =
+        continuationRun &&
+        (yield* continuationOwnership
+          .disposition({
+            runId: continuationRun.id,
+            messageId: continuationRun.userMessageId,
+          })
+          .pipe(Effect.orDie)) === "ordinary"
+          ? [
+              {
+                id: `effect:restart-continuation:${continuationRun.id}`,
+                commandId,
+                threadId: projection.thread.id,
+                request: { type: "provider-runtime.continue", sourceRunId: continuationRun.id },
+              },
+            ]
+          : [];
       const stoppedSessions = projection.providerSessions.filter(
         (candidate) => candidate.status !== "stopped" && candidate.status !== "error",
       ).length;
@@ -766,6 +775,15 @@ export const make = Effect.gen(function* () {
           return;
         const run = restartContinuationRun(projection, yield* DateTime.now);
         if (!run) return;
+        if (
+          (yield* continuationOwnership
+            .disposition({
+              runId: run.id,
+              messageId: run.userMessageId,
+            })
+            .pipe(Effect.orDie)) === "mailbox_owned"
+        )
+          return;
         const commandId = CommandId.make(`command:restart-prepare:${run.id}`);
         yield* eventSink.writeWithEffects({
           commandId,

@@ -49,6 +49,7 @@ it.effect("fresh application persistence applies the feature track after core mi
       { migration_id: 1, name: "CanonicalState" },
       { migration_id: 2, name: "WakeFacts" },
       { migration_id: 3, name: "Mailbox" },
+      { migration_id: 4, name: "Recovery" },
     ]);
     assert.deepEqual(
       yield* sql`SELECT name FROM sqlite_schema WHERE name='overseer_attempts_run_attempt_idx'`,
@@ -71,6 +72,7 @@ it.effect("upstream-only migration guard accepts a database with namespaced feat
       [1, "CanonicalState"],
       [2, "WakeFacts"],
       [3, "Mailbox"],
+      [4, "Recovery"],
     ]);
     yield* sql`INSERT INTO overseer_mailboxes(observer_thread_id, hold_mask) VALUES ('observer', 1)`;
     assert.deepEqual(yield* runCoreMigrations(), []);
@@ -93,6 +95,7 @@ it.effect("upgrades the slice-1 schema without changing existing mailbox revisio
     assert.deepEqual(yield* runMigrations(), [
       [2, "WakeFacts"],
       [3, "Mailbox"],
+      [4, "Recovery"],
     ]);
     assert.deepEqual(
       yield* sql`SELECT revision FROM overseer_mailboxes WHERE observer_thread_id = 'observer'`,
@@ -134,6 +137,7 @@ it.effect("re-running the feature migrator is idempotent and preserves data", ()
       { migration_id: 1, name: "CanonicalState" },
       { migration_id: 2, name: "WakeFacts" },
       { migration_id: 3, name: "Mailbox" },
+      { migration_id: 4, name: "Recovery" },
     ]);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

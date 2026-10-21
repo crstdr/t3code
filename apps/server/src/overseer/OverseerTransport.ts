@@ -7,6 +7,7 @@ import {
   type OrchestrationV2StoredEvent,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -41,6 +42,8 @@ export type TransportRow = {
   readonly native_uuid: string | null;
   readonly provider_session_id: string | null;
   readonly receipt_kind: string | null;
+  readonly submitted_at: string | null;
+  readonly unconfirmed_logged_at: string | null;
 };
 export class TransportError extends Schema.TaggedError<TransportError>()("OverseerTransportError", {
   operation: Schema.String,
@@ -84,6 +87,15 @@ export class OverseerTransport extends Context.Service<
     readonly retire: (message: MessageId) => Effect.Effect<void, TransportError>;
     readonly reconcileUnsent: (message: MessageId) => Effect.Effect<boolean, TransportError>;
     readonly abandonUnsent: (message: MessageId) => Effect.Effect<void, TransportError>;
+    readonly afterProcessLoss: (
+      observer: ThreadId,
+      disabled?: boolean,
+    ) => Effect.Effect<void, TransportError>;
+    readonly restoreRetry: (observer: ThreadId) => Effect.Effect<boolean, TransportError>;
+    readonly warnUnconfirmed: (
+      events: ReadonlyArray<OrchestrationV2StoredEvent>,
+      commandType?: string,
+    ) => Effect.Effect<void, TransportError>;
   }
 >()("t3/overseer/OverseerTransport") {}
 
@@ -167,6 +179,10 @@ const make = Effect.gen(function* () {
     )).map((entry) => ({ linkId: entry.link_id, kind: entry.kind, sourceId: entry.source_id }));
     return encodeMembers(members) === row.members_json;
   });
+  const clearRetry = Effect.fn("OverseerTransport.clearRetry")(function* (row: TransportRow) {
+    yield* sql`UPDATE overseer_mailboxes SET retry_message_id = NULL WHERE observer_thread_id = ${row.observer_thread_id}
+      AND EXISTS (SELECT 1 FROM overseer_transports t WHERE t.message_id = retry_message_id AND t.batch_number = ${row.batch_number})`;
+  });
   const service: OverseerTransport["Service"] = OverseerTransport.of({
     handoff: (input, send) => gate.handoff(service.submit(input), send),
     open: (observer) => execute("open", open(observer)),
@@ -183,6 +199,80 @@ const make = Effect.gen(function* () {
             if (row?.phase !== "frozen") return;
             yield* retire(message);
             yield* store.hold(ThreadId.make(row.observer_thread_id), "provider");
+          }),
+        ),
+      );
+    }),
+    afterProcessLoss: Effect.fn("OverseerTransport.afterProcessLoss")(function* (
+      observer,
+      disabled = false,
+    ) {
+      yield* execute(
+        "process-loss",
+        transaction(
+          Effect.gen(function* () {
+            const row = yield* open(observer);
+            if (row && (disabled || row.phase === "frozen" || row.phase === "submitted")) {
+              yield* sql`UPDATE overseer_mailboxes SET retry_message_id = COALESCE(retry_message_id, ${row.message_id})
+            WHERE observer_thread_id = ${observer} AND (hold_mask & 1) = 0`;
+              yield* store.disposeAttempt(MessageId.make(row.message_id), "process_loss");
+              yield* sql`UPDATE overseer_transports SET phase = 'retired' WHERE message_id = ${row.message_id}`;
+              yield* store.touch(observer);
+            }
+            const orphan = yield* store.pendingAttempt(observer);
+            if (orphan && (!row || row.message_id !== orphan.message_id))
+              yield* store.disposeAttempt(MessageId.make(orphan.message_id), "process_loss");
+          }),
+        ),
+      );
+    }),
+    restoreRetry: Effect.fn("OverseerTransport.restoreRetry")(function* (observer) {
+      if (!(yield* OverseerFeature.Enabled)) return false;
+      return yield* execute(
+        "restore-retry",
+        transaction(
+          Effect.gen(function* () {
+            const box = yield* store.mailbox(observer);
+            if (!box?.retry_message_id) return true;
+            if (box.hold_mask !== 0) return false;
+            const origin = yield* forMessage(box.retry_message_id);
+            if (!origin)
+              return yield* new OverseerStore.OverseerConflict({ reason: "attempt_identity" });
+            const survivors: Array<typeof Member.Type> = [];
+            for (const member of yield* decodeMembers(origin.members_json)) {
+              const row = (yield* sql<{
+                readonly ready: number;
+                readonly state: string;
+                readonly available: number;
+              }>`
+            SELECT o.ready, l.state, (t.thread_id IS NOT NULL AND t.archived_at IS NULL AND t.deleted_at IS NULL) AS available
+            FROM overseer_occurrences o JOIN overseer_links l ON l.link_id = o.link_id
+            LEFT JOIN orchestration_v2_projection_threads t ON t.thread_id = l.target_thread_id
+            WHERE o.link_id = ${member.linkId} AND o.kind = ${member.kind} AND o.source_id = ${member.sourceId}
+              AND o.disposition = 'pending'`)[0];
+              if (!row || row.state !== "active") continue;
+              if (row.ready !== 1 || row.available !== 1) continue;
+              survivors.push(member);
+            }
+            if (survivors.length === 0) {
+              yield* clearRetry(origin);
+              yield* store.releaseUnsentBatch(observer, origin.batch_number);
+              return true;
+            }
+            const other = yield* sql<{
+              readonly batch_number: number;
+            }>`SELECT batch_number FROM overseer_batches
+          WHERE observer_thread_id = ${observer} AND state IN ('queued', 'frozen') AND batch_number <> ${origin.batch_number}`;
+            for (const batch of other)
+              yield* store.releaseUnsentBatch(observer, batch.batch_number);
+            yield* sql`UPDATE overseer_occurrences SET batch_number = NULL WHERE observer_thread_id = ${observer} AND batch_number = ${origin.batch_number}`;
+            const latest = (yield* store.mailbox(observer))!;
+            yield* sql`UPDATE overseer_batches SET state = 'frozen', epoch = ${latest.epoch}, revision = ${latest.revision}
+          WHERE observer_thread_id = ${observer} AND batch_number = ${origin.batch_number} AND state IN ('queued', 'frozen', 'disposed')`;
+            for (const member of survivors)
+              yield* sql`UPDATE overseer_occurrences SET batch_number = ${origin.batch_number}
+          WHERE link_id = ${member.linkId} AND kind = ${member.kind} AND source_id = ${member.sourceId} AND disposition = 'pending' AND ready = 1`;
+            return true;
           }),
         ),
       );
@@ -262,6 +352,13 @@ const make = Effect.gen(function* () {
           for (const message of messages) {
             const row = yield* forMessage(message);
             if (!row || row.phase === "received" || row.phase === "retired") continue;
+            // Startup owns process-loss disposition; preserve the logical batch until
+            // its bounded reconciliation runs after core runtime normalization.
+            if (
+              commandType === "provider-runtime.reconcile" &&
+              ["frozen", "submitted"].includes(row.phase)
+            )
+              continue;
             const cancelled = yield* sql`SELECT 1 FROM orchestration_v2_projection_runs
               WHERE run_id = ${row.run_id} AND status IN ('cancelled', 'interrupted')`;
             const grant = yield* OverseerNoticeGrant;
@@ -278,6 +375,9 @@ const make = Effect.gen(function* () {
                 yield* sql`UPDATE overseer_occurrences SET disposition = 'suppressed', batch_number = NULL
               WHERE link_id = ${member.linkId} AND kind = ${member.kind} AND source_id = ${member.sourceId} AND disposition = 'pending'`;
               yield* store.disposeAttempt(MessageId.make(message), "cancel");
+              yield* sql`UPDATE overseer_batches SET state = 'suppressed' WHERE observer_thread_id = ${row.observer_thread_id}
+                AND batch_number = ${row.batch_number} AND state IN ('queued', 'frozen')`;
+              yield* clearRetry(row);
               yield* sql`UPDATE overseer_transports SET phase = 'retired' WHERE message_id = ${message}`;
               yield* store.touch(ThreadId.make(row.observer_thread_id));
               continue;
@@ -371,12 +471,41 @@ const make = Effect.gen(function* () {
             // Persist uncertainty before the external handoff. handoff() retains the
             // feature gate until outbound enqueue, but never through the native response.
             yield* sql`UPDATE overseer_transports SET phase = 'submitted', native_uuid = ${input.nativeUuid ?? null},
-          provider_session_id = ${input.providerSessionId} WHERE message_id = ${input.messageId}`;
+          provider_session_id = ${input.providerSessionId}, submitted_at = ${DateTime.formatIso(yield* DateTime.now)} WHERE message_id = ${input.messageId}`;
             return true;
           }),
         ),
       );
     }),
+    warnUnconfirmed: Effect.fn("OverseerTransport.warnUnconfirmed")(
+      function* (events, commandType) {
+        if (!(yield* OverseerFeature.Enabled) || commandType === "provider-runtime.reconcile")
+          return;
+        const runIds = new Set(
+          events.flatMap(({ event }) =>
+            event.type === "run.updated" &&
+            ["completed", "failed", "cancelled", "interrupted"].includes(event.payload.status)
+              ? [event.payload.id]
+              : [],
+          ),
+        );
+        for (const runId of runIds) {
+          const rows = yield* execute(
+            "warn-unconfirmed",
+            transaction(sql<TransportRow>`UPDATE overseer_transports
+          SET unconfirmed_logged_at = ${DateTime.formatIso(yield* DateTime.now)}
+          WHERE run_id = ${runId} AND phase = 'submitted' AND unconfirmed_logged_at IS NULL RETURNING *`),
+          );
+          for (const row of rows)
+            yield* Effect.logWarning("Overseer input ended without a provider receipt", {
+              messageId: row.message_id,
+              observerThreadId: row.observer_thread_id,
+              runId,
+              submittedAt: row.submitted_at,
+            });
+        }
+      },
+    ),
     receipt: Effect.fn("OverseerTransport.receipt")(function* (input) {
       if (!(yield* OverseerFeature.Enabled)) return false;
       return yield* execute(
@@ -406,6 +535,7 @@ const make = Effect.gen(function* () {
             yield* sql`UPDATE overseer_batches SET state = 'accepted' WHERE observer_thread_id = ${row.observer_thread_id}
           AND batch_number = ${row.batch_number} AND state = 'frozen'`;
             yield* sql`UPDATE overseer_transports SET phase = 'received', receipt_kind = ${input.kind} WHERE message_id = ${input.messageId}`;
+            yield* clearRetry(row);
             yield* store.touch(ThreadId.make(row.observer_thread_id));
             return true;
           }),

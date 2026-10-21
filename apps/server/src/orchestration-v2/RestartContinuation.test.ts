@@ -27,6 +27,7 @@ import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
+import * as OverseerContinuation from "../overseer/OverseerContinuation.ts";
 
 const threadId = ThreadId.make("thread:restart");
 const runId = RunId.make("run:restart");
@@ -289,6 +290,55 @@ it.effect.each([
           type: "provider-runtime.continue",
           sourceRunId: runId,
         });
+    }),
+);
+
+it.effect.each(["ordinary", "mailbox_owned"] as const)(
+  "startup and shutdown respect the explicit %s ownership disposition before scheduling continuation",
+  (disposition) =>
+    Effect.gen(function* () {
+      const projection = makeProjection();
+      const effects: Array<EffectOutbox.PendingOrchestrationEffectV2> = [];
+      let normalized = false;
+      const recovery = yield* ProviderRuntimeRecovery.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ServerSettings.layerTest({ continueThreadsAfterServerUpdate: true }),
+            Layer.succeed(OverseerContinuation.OverseerContinuation, {
+              disposition: () => Effect.succeed(disposition),
+            }),
+            Layer.mock(ProjectionStore.ProjectionStoreV2)({
+              getRecoveryThreadIds: () => Effect.succeed([threadId]),
+              getRuntimeRecoveryProjection: () => Effect.succeed(projection),
+            }),
+            Layer.mock(EventSink.EventSinkV2)({
+              commitCommand: (input) =>
+                Effect.sync(() => {
+                  normalized = input.events.some(
+                    (event) => event.type === "run.updated" && event.payload.status === "cancelled",
+                  );
+                  effects.push(...input.effects);
+                  return { committed: true, cancelledEffectCount: 0 } as never;
+                }),
+              writeWithEffects: (input) =>
+                Effect.sync(() => {
+                  effects.push(...input.effects);
+                  return [];
+                }),
+            }),
+            IdAllocator.layer,
+            Layer.mock(EffectOutbox.EffectOutboxV2)({
+              reconcileAfterProcessLoss: Effect.succeed({ requeued: 0, cancelled: 0 }),
+            }),
+          ),
+        ),
+      );
+      yield* recovery.reconcile("startup");
+      assert.isTrue(normalized);
+      assert.lengthOf(effects, disposition === "ordinary" ? 1 : 0);
+      effects.length = 0;
+      yield* recovery.prepareForShutdown;
+      assert.lengthOf(effects, disposition === "ordinary" ? 1 : 0);
     }),
 );
 

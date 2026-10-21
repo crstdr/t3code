@@ -2,6 +2,7 @@ import { assert, it, vi } from "@effect/vitest";
 import {
   CommandId,
   EventId,
+  MessageId,
   NodeId,
   ProviderDriverKind,
   ProviderSessionId,
@@ -11,6 +12,10 @@ import {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Recovery from "./OverseerRecovery.ts";
+import * as Feature from "./OverseerFeature.ts";
+import * as Settings from "../serverSettings.ts";
 import * as Sink from "../orchestration-v2/EventSink.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as Store from "./OverseerStore.ts";
@@ -168,6 +173,48 @@ it.effect.each([
         const replacement = (yield* transport.open(observer))!;
         assert.notEqual(replacement.message_id, row.message_id);
       }
+    }).pipe(enabled, Effect.provide(harness())),
+);
+
+it.effect(
+  "disabled startup cancels only the private queued input without advancing or replacing ordinary work",
+  () =>
+    Effect.gen(function* () {
+      const { core, store, question, sync } = yield* fixture();
+      yield* question("disable");
+      yield* sync();
+      yield* core.dispatch({
+        type: "message.dispatch",
+        threadId: observer,
+        commandId: CommandId.make("ordinary:queued"),
+        messageId: MessageId.make("ordinary:queued"),
+        text: "Ordinary fixture work",
+        attachments: [],
+        createdBy: "user",
+        creationSource: "web",
+        dispatchMode: { type: "queue_after_active" },
+      });
+      const before = yield* core.getThreadRecords(observer, ["runs", "messages"]);
+      const privateRun = before.runs.find((run) =>
+        run.userMessageId.startsWith("message:overseer:"),
+      )!;
+      const ordinary = before.runs.find((run) => run.userMessageId === "ordinary:queued")!;
+      assert.equal(privateRun.status, "queued");
+      assert.equal(ordinary.status, "queued");
+      const recovery = yield* Recovery.OverseerRecovery.pipe(
+        Effect.provide(Recovery.layer.pipe(Layer.provide(Settings.layerTest()))),
+      );
+      yield* recovery.recover.pipe(Effect.provideService(Feature.Enabled, false));
+      const after = yield* core.getThreadRecords(observer, ["runs", "messages"]);
+      assert.equal(after.runs.find((run) => run.id === privateRun.id)?.status, "cancelled");
+      assert.deepEqual(
+        after.runs.find((run) => run.id === ordinary.id),
+        ordinary,
+      );
+      assert.deepEqual(after.messages, before.messages);
+      assert.equal((yield* store.mailbox(observer))!.hold_mask & 16, 16);
+      yield* sync();
+      assert.deepEqual((yield* core.getThreadRecords(observer, ["runs"])).runs, after.runs);
     }).pipe(enabled, Effect.provide(harness())),
 );
 

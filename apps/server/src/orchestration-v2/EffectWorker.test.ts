@@ -33,6 +33,7 @@ import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as OverseerContinuation from "../overseer/OverseerContinuation.ts";
 
 const threadId = ThreadId.make("thread:effect-worker-restart");
 const oldSessionId = ProviderSessionId.make("provider-session:effect-worker-restart:old");
@@ -75,6 +76,33 @@ function restartEffect(
     lastError: null,
   };
 }
+
+it.effect(
+  "captures private continuation ownership at executor construction, not from the later worker context",
+  () =>
+    Effect.gen(function* () {
+      const executor = yield* EffectWorker.OrchestrationEffectExecutorV2.pipe(
+        Effect.provide(
+          layerExecutorFor({
+            events: yield* Ref.make<ReadonlyArray<string>>([]),
+            threads: {
+              recoverDelegatedTask: () => Effect.die("owned input must not settle delegated work"),
+            },
+          }).pipe(
+            Layer.provide(
+              Layer.succeed(OverseerContinuation.OverseerContinuation, {
+                disposition: () => Effect.succeed("mailbox_owned"),
+              }),
+            ),
+          ),
+        ),
+      );
+      yield* executor.execute({
+        ...restartEffect(yield* DateTime.now, { type: "detach" }),
+        request: { type: "provider-runtime.continue", sourceRunId: runId },
+      });
+    }),
+);
 
 function layerExecutorFor(input: {
   readonly events: Ref.Ref<ReadonlyArray<string>>;

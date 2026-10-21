@@ -53,6 +53,8 @@ import * as OverseerStore from "../overseer/OverseerStore.ts";
 import * as OverseerWakeFacts from "../overseer/OverseerWakeFacts.ts";
 import * as OverseerMailbox from "../overseer/OverseerMailbox.ts";
 import * as OverseerTransport from "../overseer/OverseerTransport.ts";
+import * as OverseerContinuation from "../overseer/OverseerContinuation.ts";
+import * as OverseerRecovery from "../overseer/OverseerRecovery.ts";
 import * as ThreadLaunchService from "./ThreadLaunchService.ts";
 import * as ThreadLifecycleService from "./ThreadLifecycleService.ts";
 import * as ThreadForkService from "./ThreadForkService.ts";
@@ -226,6 +228,7 @@ const layerOrchestratorProvided = Orchestrator.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
       OverseerMailbox.layer,
+      OverseerContinuation.layer,
       layerCheckpointServiceProvided,
       CommandPolicy.layer,
       layerStores,
@@ -335,6 +338,7 @@ const layerEffectExecutorProvided = EffectWorker.layerExecutor.pipe(
   Layer.provide(
     Layer.mergeAll(
       layerOrchestratorProvided,
+      OverseerContinuation.layer,
       layerRunFinalizationServiceProvided,
       layerCheckpointRollbackServiceProvided,
       layerProviderSessionManagerProvided,
@@ -355,6 +359,7 @@ const layerProviderRuntimeRecoveryProvided = ProviderRuntimeRecoveryService.laye
       layerEffectWorkerProvided,
       layerStores,
       layerEventSinkProvided,
+      OverseerContinuation.layer,
       IdAllocator.layer,
       ProjectionStore.layer,
     ),
@@ -391,6 +396,9 @@ export const layerProduction = Layer.mergeAll(
   layerManagedProjectFoldersProvided,
   layerThreadLaunchProvided,
   layerOverseerLaunchProvided,
+  OverseerRecovery.layer.pipe(
+    Layer.provide(Layer.mergeAll(layerOrchestratorProvided, layerProviderAdapterRegistryProvided)),
+  ),
   layerThreadLifecycleProvided,
   layerScheduledTaskProvided,
   layerSecretRequestsProvided,
