@@ -1,0 +1,726 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`keeps the unapproved catalog hidden by default and snapshots the exact opt-in catalog and errors 1`] = `
+{
+  "catalog": [
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+      },
+      "description": "Create an ordinary TOP-LEVEL thread with an explicit workspace binding before its agent starts. Use this when the user requests independent work, a new thread, or a PR stack in its own worktree; use delegate_task for child subagents. Set workspaceStrategy to {type:"worktree",baseRef:"parent-branch",branch:"new-branch",startFromOrigin:false} for a new worktree based on local commits, or {type:"existing_worktree",worktreePath:"/absolute/path",branch:"existing-branch"} to use an existing checkout. To fetch and start from the base branch's remote, set startFromOrigin:true. Omitted workspaceStrategy means the project root, NOT the caller's worktree. Omit projectId/modelSelection/modes to inherit those settings from the calling thread; a caller outside a T3 thread must pass projectId and gets the project's default model. Set scratch:true instead of projectId for a thread without a project: it runs in a fresh folder of its own, outside any repository. Put the task in message. Do not ask the agent to create its own worktree via shell: that does not update the thread binding. Each call creates a new launch with no retry key; retain threadId and use t3_thread_read/t3_thread_wait to follow preparation. To link a thread for the user, write \`[title](t3-thread://v1/<threadId>)\` with the threadId exactly as returned, not URL-encoded; T3 Code shows the thread's current title. After errors or lost responses, inspect t3_thread_list before retrying. Attachments must be pending uploads. The new thread may not run with broader runtime or interaction modes than the caller: the calling T3 thread's own modes, or the permission mode an outside agent was approved with.",
+      "inputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "attachments": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                        },
+                        "mimeType": {
+                          "type": "string",
+                        },
+                        "name": {
+                          "type": "string",
+                        },
+                        "sizeBytes": {
+                          "maximum": 10485760,
+                          "minimum": 0,
+                          "type": "integer",
+                        },
+                        "type": {
+                          "enum": [
+                            "image",
+                          ],
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "type",
+                        "id",
+                        "name",
+                        "mimeType",
+                        "sizeBytes",
+                      ],
+                      "type": "object",
+                    },
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                        },
+                        "mimeType": {
+                          "type": "string",
+                        },
+                        "name": {
+                          "type": "string",
+                        },
+                        "sizeBytes": {
+                          "maximum": 52428800,
+                          "minimum": 1,
+                          "type": "integer",
+                        },
+                        "source": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": true,
+                              "properties": {
+                                "_tag": {
+                                  "enum": [
+                                    "pasted-text",
+                                  ],
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "_tag",
+                              ],
+                              "type": "object",
+                            },
+                            {
+                              "type": "null",
+                            },
+                          ],
+                        },
+                        "type": {
+                          "enum": [
+                            "file",
+                          ],
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "type",
+                        "id",
+                        "name",
+                        "mimeType",
+                        "sizeBytes",
+                      ],
+                      "type": "object",
+                    },
+                  ],
+                },
+                "maxItems": 8,
+                "type": "array",
+              },
+              {
+                "type": "null",
+              },
+            ],
+          },
+          "interactionMode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "default",
+                  "plan",
+                ],
+                "type": "string",
+              },
+              {
+                "type": "null",
+              },
+            ],
+          },
+          "message": {
+            "anyOf": [
+              {
+                "description": "First task prompt, delivered after workspace preparation. Omit message and attachments to create an idle thread.",
+                "maxLength": 120000,
+                "type": "string",
+              },
+              {
+                "type": "null",
+              },
+            ],
+          },
+          "modelSelection": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "properties": {
+                  "instanceId": {
+                    "anyOf": [
+                      {},
+                      {
+                        "type": "null",
+                      },
+                    ],
+                  },
+                  "model": {},
+                  "options": {
+                    "anyOf": [
+                      {},
+                      {
+                        "type": "null",
+                      },
+                    ],
+                  },
+                  "provider": {
+                    "anyOf": [
+                      {},
+                      {
+                        "type": "null",
+                      },
+                    ],
+                  },
+                },
+                "required": [
+                  "model",
+                ],
+                "type": "object",
+              },
+              {
+                "type": "null",
+              },
+            ],
+          },
+          "projectId": {
+            "anyOf": [
+              {
+                "type": "string",
+              },
+              {
+                "type": "null",
+              },
+            ],
+          },
+          "runtimeMode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "approval-required",
+                  "auto-accept-edits",
+                  "auto",
+                  "full-access",
+                ],
+                "type": "string",
+              },
+              {
+                "type": "null",
+              },
+            ],
+          },
+          "scratch": {
+            "anyOf": [
+              {
+                "description": "Launch without a project, in its own folder under the environment's Scratch project. Not with projectId or workspaceStrategy.",
+                "type": "boolean",
+              },
+              {
+                "type": "null",
+              },
+            ],
+          },
+          "title": {
+            "type": "string",
+          },
+          "workspaceStrategy": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "properties": {
+                      "branch": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                          },
+                          {
+                            "type": "null",
+                          },
+                        ],
+                      },
+                      "type": {
+                        "enum": [
+                          "root",
+                        ],
+                        "type": "string",
+                      },
+                    },
+                    "required": [
+                      "type",
+                    ],
+                    "type": "object",
+                  },
+                  {
+                    "additionalProperties": true,
+                    "properties": {
+                      "branch": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                          },
+                          {
+                            "type": "null",
+                          },
+                        ],
+                      },
+                      "type": {
+                        "enum": [
+                          "existing_worktree",
+                        ],
+                        "type": "string",
+                      },
+                      "worktreePath": {
+                        "type": "string",
+                      },
+                    },
+                    "required": [
+                      "type",
+                      "worktreePath",
+                    ],
+                    "type": "object",
+                  },
+                  {
+                    "additionalProperties": true,
+                    "properties": {
+                      "baseRef": {
+                        "type": "string",
+                      },
+                      "branch": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                          },
+                          {
+                            "type": "null",
+                          },
+                        ],
+                      },
+                      "startFromOrigin": {
+                        "anyOf": [
+                          {
+                            "type": "boolean",
+                          },
+                          {
+                            "type": "null",
+                          },
+                        ],
+                      },
+                      "type": {
+                        "enum": [
+                          "worktree",
+                        ],
+                        "type": "string",
+                      },
+                    },
+                    "required": [
+                      "type",
+                      "baseRef",
+                    ],
+                    "type": "object",
+                  },
+                ],
+                "description": "Choose where this thread runs before starting its agent: worktree creates and binds a new checkout from baseRef; existing_worktree binds worktreePath, which must be one of the project's git worktrees; root uses the project checkout. Omitted means root, not the caller's worktree. For a PR stack use the parent branch as baseRef and startFromOrigin:false. Uncommitted changes are not copied.",
+              },
+              {
+                "type": "null",
+              },
+            ],
+          },
+        },
+        "required": [
+          "title",
+        ],
+        "type": "object",
+      },
+      "name": "t3_thread_launch",
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+      },
+      "description": "Create an ordinary TOP-LEVEL thread with an explicit workspace binding before its agent starts. Use this when the user requests independent work, a new thread, or a PR stack in its own worktree; use delegate_task for child subagents. Set workspaceStrategy to {type:"worktree",baseRef:"parent-branch",branch:"new-branch",startFromOrigin:false} for a new worktree based on local commits, or {type:"existing_worktree",worktreePath:"/absolute/path",branch:"existing-branch"} to use an existing checkout. To fetch and start from the base branch's remote, set startFromOrigin:true. Omitted workspaceStrategy means the project root, NOT the caller's worktree. Omit projectId/modelSelection/modes to inherit those settings from the calling thread; a caller outside a T3 thread must pass projectId and gets the project's default model. Set scratch:true instead of projectId for a thread without a project: it runs in a fresh folder of its own, outside any repository. Put the task in message. Do not ask the agent to create its own worktree via shell: that does not update the thread binding. Without oversee:true, each call creates a new launch. With oversee:true, clientRequestId identifies a retry of the same launch. Retain threadId and use t3_thread_read/t3_thread_wait to follow preparation. To link a thread for the user, write \`[title](t3-thread://v1/<threadId>)\` with the threadId exactly as returned, not URL-encoded; T3 Code shows the thread's current title. After errors or lost responses, reuse clientRequestId for an overseen launch; otherwise inspect t3_thread_list before retrying. Attachments must be pending uploads. The new thread may not run with broader runtime or interaction modes than the caller: the calling T3 thread's own modes, or the permission mode an outside agent was approved with. Set oversee:true to receive completion and user-input-question notices from the new thread. The link grants no additional access or answering authority.",
+      "inputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "attachments": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                        },
+                        "mimeType": {
+                          "type": "string",
+                        },
+                        "name": {
+                          "type": "string",
+                        },
+                        "sizeBytes": {
+                          "maximum": 10485760,
+                          "minimum": 0,
+                          "type": "integer",
+                        },
+                        "type": {
+                          "enum": [
+                            "image",
+                          ],
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "type",
+                        "id",
+                        "name",
+                        "mimeType",
+                        "sizeBytes",
+                      ],
+                      "type": "object",
+                    },
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                        },
+                        "mimeType": {
+                          "type": "string",
+                        },
+                        "name": {
+                          "type": "string",
+                        },
+                        "sizeBytes": {
+                          "maximum": 52428800,
+                          "minimum": 1,
+                          "type": "integer",
+                        },
+                        "source": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": true,
+                              "properties": {
+                                "_tag": {
+                                  "enum": [
+                                    "pasted-text",
+                                  ],
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "_tag",
+                              ],
+                              "type": "object",
+                            },
+                            {
+                              "type": "null",
+                            },
+                          ],
+                        },
+                        "type": {
+                          "enum": [
+                            "file",
+                          ],
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "type",
+                        "id",
+                        "name",
+                        "mimeType",
+                        "sizeBytes",
+                      ],
+                      "type": "object",
+                    },
+                  ],
+                },
+                "maxItems": 8,
+                "type": "array",
+              },
+              {
+                "type": "null",
+              },
+            ],
+          },
+          "clientRequestId": {
+            "anyOf": [
+              {
+                "description": "Required with oversee:true only. Reuse this key with identical launch arguments after a lost response; a different task needs a new key.",
+                "maxLength": 256,
+                "type": "string",
+              },
+              {
+                "type": "null",
+              },
+            ],
+          },
+          "interactionMode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "default",
+                  "plan",
+                ],
+                "type": "string",
+              },
+              {
+                "type": "null",
+              },
+            ],
+          },
+          "message": {
+            "anyOf": [
+              {
+                "description": "First task prompt, delivered after workspace preparation. Omit message and attachments to create an idle thread.",
+                "maxLength": 120000,
+                "type": "string",
+              },
+              {
+                "type": "null",
+              },
+            ],
+          },
+          "modelSelection": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "properties": {
+                  "instanceId": {
+                    "anyOf": [
+                      {},
+                      {
+                        "type": "null",
+                      },
+                    ],
+                  },
+                  "model": {},
+                  "options": {
+                    "anyOf": [
+                      {},
+                      {
+                        "type": "null",
+                      },
+                    ],
+                  },
+                  "provider": {
+                    "anyOf": [
+                      {},
+                      {
+                        "type": "null",
+                      },
+                    ],
+                  },
+                },
+                "required": [
+                  "model",
+                ],
+                "type": "object",
+              },
+              {
+                "type": "null",
+              },
+            ],
+          },
+          "oversee": {
+            "anyOf": [
+              {
+                "description": "Create a durable link from this calling T3 thread to the new top-level thread. Requires clientRequestId. Default false.",
+                "type": "boolean",
+              },
+              {
+                "type": "null",
+              },
+            ],
+          },
+          "projectId": {
+            "anyOf": [
+              {
+                "type": "string",
+              },
+              {
+                "type": "null",
+              },
+            ],
+          },
+          "runtimeMode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "approval-required",
+                  "auto-accept-edits",
+                  "auto",
+                  "full-access",
+                ],
+                "type": "string",
+              },
+              {
+                "type": "null",
+              },
+            ],
+          },
+          "scratch": {
+            "anyOf": [
+              {
+                "description": "Launch without a project, in its own folder under the environment's Scratch project. Not with projectId or workspaceStrategy.",
+                "type": "boolean",
+              },
+              {
+                "type": "null",
+              },
+            ],
+          },
+          "title": {
+            "type": "string",
+          },
+          "workspaceStrategy": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "properties": {
+                      "branch": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                          },
+                          {
+                            "type": "null",
+                          },
+                        ],
+                      },
+                      "type": {
+                        "enum": [
+                          "root",
+                        ],
+                        "type": "string",
+                      },
+                    },
+                    "required": [
+                      "type",
+                    ],
+                    "type": "object",
+                  },
+                  {
+                    "additionalProperties": true,
+                    "properties": {
+                      "branch": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                          },
+                          {
+                            "type": "null",
+                          },
+                        ],
+                      },
+                      "type": {
+                        "enum": [
+                          "existing_worktree",
+                        ],
+                        "type": "string",
+                      },
+                      "worktreePath": {
+                        "type": "string",
+                      },
+                    },
+                    "required": [
+                      "type",
+                      "worktreePath",
+                    ],
+                    "type": "object",
+                  },
+                  {
+                    "additionalProperties": true,
+                    "properties": {
+                      "baseRef": {
+                        "type": "string",
+                      },
+                      "branch": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                          },
+                          {
+                            "type": "null",
+                          },
+                        ],
+                      },
+                      "startFromOrigin": {
+                        "anyOf": [
+                          {
+                            "type": "boolean",
+                          },
+                          {
+                            "type": "null",
+                          },
+                        ],
+                      },
+                      "type": {
+                        "enum": [
+                          "worktree",
+                        ],
+                        "type": "string",
+                      },
+                    },
+                    "required": [
+                      "type",
+                      "baseRef",
+                    ],
+                    "type": "object",
+                  },
+                ],
+                "description": "Choose where this thread runs before starting its agent: worktree creates and binds a new checkout from baseRef; existing_worktree binds worktreePath, which must be one of the project's git worktrees; root uses the project checkout. Omitted means root, not the caller's worktree. For a PR stack use the parent branch as baseRef and startFromOrigin:false. Uncommitted changes are not copied.",
+              },
+              {
+                "type": "null",
+              },
+            ],
+          },
+        },
+        "required": [
+          "title",
+        ],
+        "type": "object",
+      },
+      "name": "t3_thread_launch",
+    },
+  ],
+  "errors": [
+    "oversee:true requires a calling T3 thread.",
+    "clientRequestId is required with oversee:true.",
+    "clientRequestId is supported only with oversee:true.",
+    "This clientRequestId was already used with different launch arguments. Use the original arguments or a new key.",
+    "This provider is not supported for oversight in v1. Use Codex or Claude, or launch without oversee:true.",
+    "The oversight link is not available to this calling thread.",
+    "The launch is reserved but not finished. Retry with the same clientRequestId.",
+    "Oversight storage is unavailable. The overseen launch was not started.",
+    "oversee:true requires message.",
+  ],
+  "strings": {
+    "E1": "oversee:true requires a calling T3 thread.",
+    "E2": "clientRequestId is required with oversee:true.",
+    "E3": "clientRequestId is supported only with oversee:true.",
+    "E4": "This clientRequestId was already used with different launch arguments. Use the original arguments or a new key.",
+    "E5": "This provider is not supported for oversight in v1. Use Codex or Claude, or launch without oversee:true.",
+    "E6": "The oversight link is not available to this calling thread.",
+    "E7": "The launch is reserved but not finished. Retry with the same clientRequestId.",
+    "E8": "Oversight storage is unavailable. The overseen launch was not started.",
+    "E9": "oversee:true requires message.",
+    "T1": "Without oversee:true, each call creates a new launch. With oversee:true, clientRequestId identifies a retry of the same launch. Retain threadId and use t3_thread_read/t3_thread_wait to follow preparation.",
+    "T2": "After errors or lost responses, reuse clientRequestId for an overseen launch; otherwise inspect t3_thread_list before retrying.",
+    "T3": "Set oversee:true to receive completion and user-input-question notices from the new thread. The link grants no additional access or answering authority.",
+    "T4": "Create a durable link from this calling T3 thread to the new top-level thread. Requires clientRequestId. Default false.",
+    "T5": "Required with oversee:true only. Reuse this key with identical launch arguments after a lost response; a different task needs a new key.",
+  },
+}
+`;

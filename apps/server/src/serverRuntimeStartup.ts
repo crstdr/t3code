@@ -20,6 +20,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -35,6 +36,8 @@ import * as LegacyV1ThreadImporter from "./orchestration-v2/legacy/LegacyV1Threa
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeRecoveryService.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
+import * as OverseerLaunch from "./overseer/OverseerLaunchService.ts";
+import * as OverseerFeature from "./overseer/OverseerFeature.ts";
 import * as ThreadLaunch from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
@@ -554,6 +557,21 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
       recoverDelegatedTasks: runStartupPhase(
         "orchestration-v2.delegated-tasks.recover",
         orchestrator.recoverDelegatedTasks,
+      ).pipe(
+        Effect.andThen(
+          runStartupPhase(
+            "overseer.launches.recover",
+            Effect.gen(function* () {
+              if (!(yield* OverseerFeature.Enabled)) return;
+              const service = yield* Effect.serviceOption(OverseerLaunch.OverseerLaunchService);
+              if (Option.isNone(service))
+                return yield* new OverseerLaunch.OverseerLaunchError({ reason: "E8" });
+              const summary = yield* service.value.recover;
+              if (summary.pending > 0)
+                yield* Effect.logWarning("Incomplete overseer launches remain", summary);
+            }),
+          ),
+        ),
       ),
       startEffectWorker: runStartupPhase(
         "orchestration-v2.effect-worker.start",

@@ -42,7 +42,8 @@ import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
 import * as PreviewControlsHandlers from "./toolkits/previewControls/handlers.ts";
 import { EnvironmentToolkit } from "./toolkits/environment/tools.ts";
 import * as EnvironmentHandlers from "./toolkits/environment/handlers.ts";
-import { ProjectToolkit } from "./toolkits/project/tools.ts";
+import { ProjectToolkit, ProjectToolkitOverseer } from "./toolkits/project/tools.ts";
+import * as OverseerFeature from "../overseer/OverseerFeature.ts";
 import * as ProjectHandlers from "./toolkits/project/handlers.ts";
 import { AttachmentToolkit } from "./toolkits/attachment/tools.ts";
 import * as AttachmentHandlers from "./toolkits/attachment/handlers.ts";
@@ -1030,7 +1031,13 @@ const layerEnvironmentToolkit = toolkitRegistration(
   EnvironmentHandlers.layer,
 ).pipe(Layer.provide(ThreadCommandExecutor.layer));
 
-const layerProjectRegistration = toolkitRegistration(ProjectToolkit, ProjectHandlers.layer);
+const layerProjectRegistration = Layer.unwrap(
+  Effect.map(OverseerFeature.Enabled, (enabled) =>
+    enabled
+      ? toolkitRegistration(ProjectToolkitOverseer, ProjectHandlers.layerOverseer)
+      : toolkitRegistration(ProjectToolkit, ProjectHandlers.layer),
+  ),
+);
 
 export const layerAttachmentToolkit = toolkitRegistration(
   AttachmentToolkit,
