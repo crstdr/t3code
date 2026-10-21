@@ -108,7 +108,7 @@ it.effect(
       assert.isFalse(Tool.getDescription(ordinary)?.includes("oversee:true") ?? false);
       assert.notProperty(Tool.getJsonSchema(ordinary).properties, "oversee");
       assert.notEqual(Tool.getStrictMode(ordinary), true);
-      assert.isTrue(Tool.getStrictMode(overseen));
+      assert.notEqual(Tool.getStrictMode(overseen), true);
       assert.deepEqual(
         Object.keys(ProjectToolkit.tools),
         Object.keys(ProjectToolkitOverseer.tools),
@@ -117,11 +117,23 @@ it.effect(
         (yield* renderCatalog()).find((tool) => tool.name === "t3_thread_launch"),
         (yield* renderCatalog(true)).find((tool) => tool.name === "t3_thread_launch"),
       ];
+      const upstream = pinnedCatalog.find((tool) => tool.name === "t3_thread_launch")!;
+      const { oversee, clientRequestId, ...properties } = catalog[1]!.inputSchema.properties ?? {};
+      assert.isDefined(oversee);
+      assert.isDefined(clientRequestId);
+      assert.equal(
+        JSON.stringify({ ...catalog[1]!.inputSchema, properties }),
+        JSON.stringify(upstream.inputSchema),
+      );
       for (const key of ["T1", "T2", "T3", "T4", "T5"] as const)
         assert.include(JSON.stringify(catalog[1]), launchText[key]);
       assert.include(JSON.stringify(catalog[1]), '"maxLength":256');
       expect({
         catalog,
+        entryBytes: {
+          ordinary: new TextEncoder().encode(JSON.stringify(catalog[0])).byteLength,
+          enabled: new TextEncoder().encode(JSON.stringify(catalog[1])).byteLength,
+        },
         strings: launchText,
         errors: (["E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8", "E9"] as const).map(
           (reason) => toMcpFailure(new OverseerLaunchError({ reason })).message,

@@ -54,9 +54,6 @@ const decodeLaunch = Schema.decodeUnknownEffect(LaunchParameters, {
   onExcessProperty:
     Tool.getStrictMode(ProjectToolkit.tools.t3_thread_launch) === true ? "error" : "ignore",
 });
-const decodeStrictOverseer = Schema.decodeUnknownEffect(OverseerLaunchParameters, {
-  onExcessProperty: "error",
-});
 
 it.effect(
   "reserves before core creation and returns identical receipts across concurrent retries",
@@ -151,7 +148,7 @@ it.effect("uses authenticated observer identity across projects", () =>
 );
 
 it.effect(
-  "fails closed for disabled feature, external or unauthorized caller, missing key, and spoofed input",
+  "fails closed for disabled feature, external or unauthorized caller, and missing key",
   () =>
     Effect.gen(function* () {
       const saga = yield* setup();
@@ -179,14 +176,6 @@ it.effect(
         Effect.flip,
       );
       assert.equal(missing.message, new Saga.OverseerLaunchError({ reason: "E2" }).message);
-      for (const decode of [decodeStrictOverseer]) {
-        assert.isTrue(
-          (yield* decode({
-            ...request,
-            observerThreadId: "spoof",
-          }).pipe(Effect.result))._tag === "Failure",
-        );
-      }
       assert.deepEqual(yield* decodeLaunch({ ...request, observerThreadId: "spoof" }), {
         title: request.title,
         message: request.message,
@@ -196,7 +185,7 @@ it.effect(
 );
 
 it.effect(
-  "the ordinary toolkit ignores unknown arguments while the opt-in toolkit rejects key-only calls",
+  "both toolkits ignore unknown arguments while the enabled toolkit rejects key-only calls",
   () =>
     Effect.gen(function* () {
       yield* setup();
@@ -224,7 +213,12 @@ it.effect(
       ) {
         return yield* enabled(
           toolkit
-            .handle("t3_thread_launch", input, undefined, { onExcessProperty: "error" })
+            .handle("t3_thread_launch", input, undefined, {
+              onExcessProperty:
+                Tool.getStrictMode(ProjectToolkitOverseer.tools.t3_thread_launch) === true
+                  ? "error"
+                  : "ignore",
+            })
             .pipe(Stream.unwrap, Stream.runHead),
         );
       });
@@ -236,12 +230,27 @@ it.effect(
         JSON.stringify(keyOnly.encodedResult),
         new Saga.OverseerLaunchError({ reason: "E3" }).message,
       );
-      const idle = Option.getOrThrow(yield* call({ title: "Ordinary idle" }));
+      const ordinaryWithUnknown = {
+        title: "Ordinary idle",
+        observerThreadId: "spoof",
+        unknownField: "ignored",
+      };
+      const idle = Option.getOrThrow(yield* call(ordinaryWithUnknown));
       assert.isFalse(idle.isFailure);
       assert.notProperty(idle.encodedResult, "linkId");
-      const launched = Option.getOrThrow(yield* call(request));
+      const overseenWithUnknown = {
+        ...request,
+        observerThreadId: "spoof",
+        unknownField: "ignored",
+      };
+      const launched = Option.getOrThrow(yield* call(overseenWithUnknown));
       assert.isFalse(launched.isFailure);
       assert.property(launched.encodedResult, "linkId");
+      const row = yield* (yield* Store.OverseerStore).reservationFor(
+        observer,
+        request.clientRequestId,
+      );
+      assert.equal(row?.observer_thread_id, observer);
       const sql = yield* SqlClient.SqlClient;
       yield* sql`CREATE TRIGGER reject_accept BEFORE UPDATE OF launch_accepted ON overseer_links BEGIN SELECT RAISE(ABORT,'injected acceptance failure'); END`;
       const unfinished = Option.getOrThrow(

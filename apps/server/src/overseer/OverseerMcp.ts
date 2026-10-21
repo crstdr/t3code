@@ -2,7 +2,6 @@ import { OrchestratorMcpFailure, ProjectId, ThreadId } from "@t3tools/contracts"
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { Tool } from "effect/ai";
 import type { ProjectToolkit } from "../mcp/toolkits/project/tools.ts";
 import { extendLaunchParameters, type Request } from "./OverseerLaunchInput.ts";
 import * as Launch from "./OverseerLaunchService.ts";
@@ -22,8 +21,7 @@ export function extendThreadLaunch(baseline: typeof ProjectToolkit.tools.t3_thre
         projectId: Schema.optional(ProjectId),
       }),
     )
-    .addDependency(Launch.OverseerLaunchService)
-    .annotate(Tool.Strict, true);
+    .addDependency(Launch.OverseerLaunchService);
   // Fluent operations clone the tool; the ordinary catalog must retain its exact description.
   return Object.assign(tool, {
     description: oversightLaunchDescription(baseline.description ?? ""),
