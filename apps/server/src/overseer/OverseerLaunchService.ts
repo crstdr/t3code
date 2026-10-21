@@ -46,7 +46,8 @@ import * as Folders from "../project/ManagedProjectFolders.ts";
 import * as Providers from "../provider/ProviderRegistry.ts";
 import * as Feature from "./OverseerFeature.ts";
 import * as Store from "./OverseerStore.ts";
-import { OverseerLaunchParameters } from "./OverseerLaunchInput.ts";
+import type { Request } from "./OverseerLaunchInput.ts";
+import * as ReservedUploads from "./ReservedUploads.ts";
 import { assertProjectWorktree } from "./LaunchValidation.ts";
 import { launchText } from "./OverseerText.ts";
 
@@ -80,7 +81,6 @@ export function toMcpFailure(error: OverseerLaunchError) {
   );
 }
 
-type Request = typeof OverseerLaunchParameters.Type;
 const DurableInput = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
@@ -327,7 +327,17 @@ const make = Effect.gen(function* () {
         return { threadId: input.threadId, projection, resumed: true };
       }
       const owner = yield* validateOwner(row, input);
-      return yield* Intake.launchThread(launchInput, { recoverReservedClaims: true }).pipe(
+      const attachments = yield* ReservedUploads.claim({
+        threadId: input.threadId,
+        attachments: initialMessage?.attachments ?? [],
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(ServerConfig.ServerConfig, config),
+      );
+      return yield* Intake.launchThread({
+        ...launchInput,
+        ...(initialMessage ? { initialMessage: { ...initialMessage, attachments } } : {}),
+      }).pipe(
         Effect.provideService(DispatchModeLimit, {
           runtimeMode: owner.runtimeMode,
           interactionMode: owner.interactionMode,
@@ -488,7 +498,7 @@ const make = Effect.gen(function* () {
           const commandId = CommandId.make(`overseer:launch:${identity}`);
           const threadId = ThreadId.make(`overseer:${identity}`);
           const messageId = MessageId.make(`overseer:initial:${identity}`);
-          yield* Claims.validatePendingAttachments({ threadId, attachments }).pipe(
+          yield* ReservedUploads.validate({ threadId, attachments }).pipe(
             Effect.provideService(FileSystem.FileSystem, fs),
             Effect.provideService(ServerConfig.ServerConfig, config),
             Effect.mapError(

@@ -6,7 +6,6 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as Option from "effect/Option";
 
 import {
   parseThreadSegmentFromAttachmentId,
@@ -56,108 +55,91 @@ export const releaseClaimedAttachments = Effect.fn("AttachmentClaims.releaseClai
  * A copy, not a move — the pending file stays behind as the retry source for a
  * failed bootstrap, and the periodic pending sweep reclaims it later.
  */
-type PendingInput = {
-  readonly threadId: string;
-  readonly attachments: ReadonlyArray<ChatAttachment>;
-  readonly recoverReservedClaims?: boolean;
-};
-// The public validation/claim operations own the span; both use the same admission checks.
-const preparePendingAttachments = Effect.fnUntraced(function* (input: PendingInput, copy: boolean) {
-  yield* validateAttachmentLimits(input.attachments);
-  if (
-    new Set(input.attachments.map((attachment) => attachment.id)).size !== input.attachments.length
-  ) {
-    return yield* new AttachmentClaimError({
-      message: "Duplicate attachment ids are not allowed.",
-    });
-  }
-  if (!input.attachments.some(attachmentIsPendingUpload)) {
-    return { attachments: input.attachments, claimedPaths: [] } satisfies ClaimedAttachments;
-  }
-  const serverConfig = yield* ServerConfig.ServerConfig;
-  const fileSystem = yield* FileSystem.FileSystem;
-  const claimedPaths: string[] = [];
-  const attachments = yield* Effect.forEach(
-    input.attachments,
-    (attachment) =>
-      Effect.gen(function* () {
-        if (!attachmentIsPendingUpload(attachment)) {
-          return attachment;
-        }
-        const claim = planAttachmentClaim({
-          attachmentsDir: serverConfig.attachmentsDir,
-          threadId: input.threadId,
-          attachmentId: attachment.id,
-          ...(input.recoverReservedClaims ? { reservedAttachment: attachment } : {}),
-        });
-        if (!claim.ok) {
-          return yield* new AttachmentClaimError({
-            message: `Attachment '${attachment.name}' cannot be sent: ${claim.reason}.`,
-          });
-        }
-        const normalized: ChatAttachment = {
-          ...attachment,
-          id: ChatAttachmentId.make(claim.finalId),
-          mimeType: attachment.mimeType.toLowerCase(),
-        };
-        const expectedPath = resolveAttachmentPath({
-          attachmentsDir: serverConfig.attachmentsDir,
-          attachment: normalized,
-        });
-        if (expectedPath !== claim.finalPath) {
-          return yield* new AttachmentClaimError({
-            message: `Attachment '${attachment.name}' cannot be sent: attachment type does not match the upload.`,
-          });
-        }
-        // Only a durable reservation can opt in: its target ID and upload metadata
-        // are immutable, and its claimed copy must outlive the pending-upload sweep.
-        if (input.recoverReservedClaims === true) {
-          const existing = yield* fileSystem.stat(claim.finalPath).pipe(Effect.option);
-          if (Option.isSome(existing) && Number(existing.value.size) === attachment.sizeBytes)
-            return normalized;
-        }
-        const info = yield* fileSystem.stat(claim.currentPath).pipe(
-          Effect.mapError(
-            (cause) =>
-              new AttachmentClaimError({
-                message: `Attachment '${attachment.name}' cannot be sent: attachment not found.`,
-                cause,
-              }),
-          ),
-        );
-        if (Number(info.size) !== attachment.sizeBytes) {
-          return yield* new AttachmentClaimError({
-            message: `Attachment '${attachment.name}' cannot be sent: stored size does not match.`,
-          });
-        }
-        if (!copy) return normalized;
-        // A copy, not a hard link: an agent editing the delivered file in
-        // place must not mutate the retry source. fs.copyFile cannot be
-        // cancelled, so the copy and its rollback registration stay in one
-        // uninterruptible region: an interrupt landing mid-copy still waits
-        // for the write to settle and records the path before cleanup runs.
-        yield* fileSystem.copyFile(claim.currentPath, claim.finalPath).pipe(
-          Effect.mapError(
-            (cause) =>
-              new AttachmentClaimError({
-                message: `Failed to claim attachment '${attachment.name}' for this thread.`,
-                cause,
-              }),
-          ),
-          Effect.andThen(Effect.sync(() => claimedPaths.push(claim.finalPath))),
-          Effect.uninterruptible,
-        );
-        return normalized;
-      }),
-    { concurrency: 1 },
-  ).pipe(Effect.onError(() => releaseClaimedAttachments(claimedPaths)));
-  return { attachments, claimedPaths } satisfies ClaimedAttachments;
-});
-
 export const claimPendingAttachments = Effect.fn("AttachmentClaims.claimPendingAttachments")(
-  (input: PendingInput) => preparePendingAttachments(input, true),
-);
-export const validatePendingAttachments = Effect.fn("AttachmentClaims.validatePendingAttachments")(
-  (input: Omit<PendingInput, "recoverReservedClaims">) =>
-    preparePendingAttachments(input, false).pipe(Effect.asVoid),
+  function* (input: {
+    readonly threadId: string;
+    readonly attachments: ReadonlyArray<ChatAttachment>;
+  }) {
+    yield* validateAttachmentLimits(input.attachments);
+    if (
+      new Set(input.attachments.map((attachment) => attachment.id)).size !==
+      input.attachments.length
+    ) {
+      return yield* new AttachmentClaimError({
+        message: "Duplicate attachment ids are not allowed.",
+      });
+    }
+    if (!input.attachments.some(attachmentIsPendingUpload)) {
+      return { attachments: input.attachments, claimedPaths: [] } satisfies ClaimedAttachments;
+    }
+    const serverConfig = yield* ServerConfig.ServerConfig;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const claimedPaths: string[] = [];
+    const attachments = yield* Effect.forEach(
+      input.attachments,
+      (attachment) =>
+        Effect.gen(function* () {
+          if (!attachmentIsPendingUpload(attachment)) {
+            return attachment;
+          }
+          const claim = planAttachmentClaim({
+            attachmentsDir: serverConfig.attachmentsDir,
+            threadId: input.threadId,
+            attachmentId: attachment.id,
+          });
+          if (!claim.ok) {
+            return yield* new AttachmentClaimError({
+              message: `Attachment '${attachment.name}' cannot be sent: ${claim.reason}.`,
+            });
+          }
+          const info = yield* fileSystem.stat(claim.currentPath).pipe(
+            Effect.mapError(
+              (cause) =>
+                new AttachmentClaimError({
+                  message: `Attachment '${attachment.name}' cannot be sent: attachment not found.`,
+                  cause,
+                }),
+            ),
+          );
+          if (Number(info.size) !== attachment.sizeBytes) {
+            return yield* new AttachmentClaimError({
+              message: `Attachment '${attachment.name}' cannot be sent: stored size does not match.`,
+            });
+          }
+          const normalized: ChatAttachment = {
+            ...attachment,
+            id: ChatAttachmentId.make(claim.finalId),
+            mimeType: attachment.mimeType.toLowerCase(),
+          };
+          const expectedPath = resolveAttachmentPath({
+            attachmentsDir: serverConfig.attachmentsDir,
+            attachment: normalized,
+          });
+          if (expectedPath !== claim.finalPath) {
+            return yield* new AttachmentClaimError({
+              message: `Attachment '${attachment.name}' cannot be sent: attachment type does not match the upload.`,
+            });
+          }
+          // A copy, not a hard link: an agent editing the delivered file in
+          // place must not mutate the retry source. fs.copyFile cannot be
+          // cancelled, so the copy and its rollback registration stay in one
+          // uninterruptible region: an interrupt landing mid-copy still waits
+          // for the write to settle and records the path before cleanup runs.
+          yield* fileSystem.copyFile(claim.currentPath, claim.finalPath).pipe(
+            Effect.mapError(
+              (cause) =>
+                new AttachmentClaimError({
+                  message: `Failed to claim attachment '${attachment.name}' for this thread.`,
+                  cause,
+                }),
+            ),
+            Effect.andThen(Effect.sync(() => claimedPaths.push(claim.finalPath))),
+            Effect.uninterruptible,
+          );
+          return normalized;
+        }),
+      { concurrency: 1 },
+    ).pipe(Effect.onError(() => releaseClaimedAttachments(claimedPaths)));
+    return { attachments, claimedPaths } satisfies ClaimedAttachments;
+  },
 );

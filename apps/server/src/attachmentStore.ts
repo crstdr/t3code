@@ -221,7 +221,6 @@ export function planAttachmentClaim(input: {
   readonly attachmentsDir: string;
   readonly threadId: string;
   readonly attachmentId: string;
-  readonly reservedAttachment?: ChatAttachment;
 }): AttachmentClaimPlan {
   const uuid = parseAttachmentUuid(input.attachmentId);
   const requestedSegment = parseThreadSegmentFromAttachmentId(input.attachmentId);
@@ -236,25 +235,15 @@ export function planAttachmentClaim(input: {
     return { ok: false, reason: "attachment must be a pending upload" };
   }
 
-  const currentPath = input.reservedAttachment
-    ? resolveAttachmentPath({
-        attachmentsDir: input.attachmentsDir,
-        attachment: input.reservedAttachment,
-      })
-    : resolveAttachmentPathById({
-        attachmentsDir: input.attachmentsDir,
-        attachmentId: input.attachmentId,
-      });
+  const currentPath = resolveAttachmentPathById({
+    attachmentsDir: input.attachmentsDir,
+    attachmentId: input.attachmentId,
+  });
   if (!currentPath) {
     return { ok: false, reason: "attachment not found (removed or expired)" };
   }
   const fileExtension = parseAttachmentFileExtension(input.attachmentId) ?? undefined;
-  const stableId = input.reservedAttachment
-    ? createDeterministicAttachmentId(input.threadId, input.attachmentId)
-    : null;
-  const finalId = input.reservedAttachment
-    ? stableId && `${stableId}${attachmentIdExtensionSuffix(fileExtension)}`
-    : createAttachmentId(input.threadId, fileExtension);
+  const finalId = createAttachmentId(input.threadId, fileExtension);
   if (!finalId) {
     return { ok: false, reason: "failed to create attachment id" };
   }

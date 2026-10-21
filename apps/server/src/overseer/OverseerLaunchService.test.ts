@@ -38,7 +38,9 @@ import * as Projections from "../orchestration-v2/ProjectionStore.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Store from "./OverseerStore.ts";
 import * as Saga from "./OverseerLaunchService.ts";
-import { OverseerLaunchParameters, LaunchParameters } from "./OverseerLaunchInput.ts";
+import { Tool } from "effect/ai";
+const LaunchParameters = ProjectToolkit.tools.t3_thread_launch.parametersSchema;
+const OverseerLaunchParameters = ProjectToolkitOverseer.tools.t3_thread_launch.parametersSchema;
 import {
   enabled,
   harness,
@@ -48,8 +50,9 @@ import {
   request,
   setup,
 } from "./OverseerLaunch.testkit.ts";
-const decodeStrictLaunch = Schema.decodeUnknownEffect(LaunchParameters, {
-  onExcessProperty: "error",
+const decodeLaunch = Schema.decodeUnknownEffect(LaunchParameters, {
+  onExcessProperty:
+    Tool.getStrictMode(ProjectToolkit.tools.t3_thread_launch) === true ? "error" : "ignore",
 });
 const decodeStrictOverseer = Schema.decodeUnknownEffect(OverseerLaunchParameters, {
   onExcessProperty: "error",
@@ -176,7 +179,7 @@ it.effect(
         Effect.flip,
       );
       assert.equal(missing.message, new Saga.OverseerLaunchError({ reason: "E2" }).message);
-      for (const decode of [decodeStrictLaunch, decodeStrictOverseer]) {
+      for (const decode of [decodeStrictOverseer]) {
         assert.isTrue(
           (yield* decode({
             ...request,
@@ -184,26 +187,35 @@ it.effect(
           }).pipe(Effect.result))._tag === "Failure",
         );
       }
-      assert.isTrue((yield* decodeStrictLaunch(request).pipe(Effect.result))._tag === "Failure");
+      assert.deepEqual(yield* decodeLaunch({ ...request, observerThreadId: "spoof" }), {
+        title: request.title,
+        message: request.message,
+      });
       assert.deepEqual(yield* (yield* Store.OverseerStore).incompleteLaunches(), []);
     }).pipe(Effect.provide(harness())),
 );
 
 it.effect(
-  "the real toolkit handlers reject hidden arguments and key-only calls, and preserve ordinary idle launches",
+  "the ordinary toolkit ignores unknown arguments while the opt-in toolkit rejects key-only calls",
   () =>
     Effect.gen(function* () {
       yield* setup();
       const ordinary = yield* ProjectToolkit.pipe(
         Effect.provide(ToolAccess.HandlersLayer.layer(Handlers.layer)),
       );
+      const withUnknown = { ...request, unknownField: "ignored" };
       const hidden = yield* enabled(
         ordinary
-          .handle("t3_thread_launch", request, undefined, { onExcessProperty: "error" })
+          .handle("t3_thread_launch", withUnknown, undefined, {
+            onExcessProperty:
+              Tool.getStrictMode(ProjectToolkit.tools.t3_thread_launch) === true
+                ? "error"
+                : "ignore",
+          })
           .pipe(Stream.unwrap, Stream.runHead),
       );
-      assert.isTrue(Option.getOrThrow(hidden).isFailure);
-      assert.equal(Option.getOrThrow(hidden).failureOrigin, "parameters");
+      assert.isFalse(Option.getOrThrow(hidden).isFailure);
+      assert.notProperty(Option.getOrThrow(hidden).encodedResult, "linkId");
       const toolkit = yield* ProjectToolkitOverseer.pipe(
         Effect.provide(ToolAccess.HandlersLayer.layer(Handlers.layerOverseer)),
       );

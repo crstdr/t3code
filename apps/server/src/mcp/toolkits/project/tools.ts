@@ -1,15 +1,15 @@
-import {
-  LaunchParameters,
-  OverseerLaunchParameters,
-} from "../../../overseer/OverseerLaunchInput.ts";
-import { oversightLaunchDescription } from "../../../overseer/OverseerText.ts";
-import * as OverseerLaunch from "../../../overseer/OverseerLaunchService.ts";
+import { extendThreadLaunch } from "../../../overseer/OverseerMcp.ts";
+import { McpAttachmentInput } from "../attachment/input.ts";
 import {
   NonNegativeInt,
   ModelSelection,
+  TrimmedNonEmptyString,
   ThreadId,
   RunId,
   OrchestrationV2RunStatus,
+  OrchestrationV2ThreadLaunchWorkspaceStrategy,
+  RuntimeMode,
+  ProviderInteractionMode,
   Project,
   ProjectCreatePayload,
   ProjectUpdatePayload,
@@ -106,7 +106,32 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
   ...shared,
   description:
     'Create an ordinary TOP-LEVEL thread with an explicit workspace binding before its agent starts. Use this when the user requests independent work, a new thread, or a PR stack in its own worktree; use delegate_task for child subagents. Set workspaceStrategy to {type:"worktree",baseRef:"parent-branch",branch:"new-branch",startFromOrigin:false} for a new worktree based on local commits, or {type:"existing_worktree",worktreePath:"/absolute/path",branch:"existing-branch"} to use an existing checkout. To fetch and start from the base branch\'s remote, set startFromOrigin:true. Omitted workspaceStrategy means the project root, NOT the caller\'s worktree. Omit projectId/modelSelection/modes to inherit those settings from the calling thread; a caller outside a T3 thread must pass projectId and gets the project\'s default model. Set scratch:true instead of projectId for a thread without a project: it runs in a fresh folder of its own, outside any repository. Put the task in message. Do not ask the agent to create its own worktree via shell: that does not update the thread binding. Each call creates a new launch with no retry key; retain threadId and use t3_thread_read/t3_thread_wait to follow preparation. To link a thread for the user, write `[title](t3-thread://v1/<threadId>)` with the threadId exactly as returned, not URL-encoded; T3 Code shows the thread\'s current title. After errors or lost responses, inspect t3_thread_list before retrying. Attachments must be pending uploads. The new thread may not run with broader runtime or interaction modes than the caller: the calling T3 thread\'s own modes, or the permission mode an outside agent was approved with.',
-  parameters: LaunchParameters,
+  parameters: Schema.Struct({
+    projectId: Schema.optional(ProjectId),
+    scratch: Schema.optional(
+      Schema.Boolean.annotate({
+        description:
+          "Launch without a project, in its own folder under the environment's Scratch project. Not with projectId or workspaceStrategy.",
+      }),
+    ),
+    title: TrimmedNonEmptyString,
+    modelSelection: Schema.optional(ModelSelection),
+    runtimeMode: Schema.optional(RuntimeMode),
+    interactionMode: Schema.optional(ProviderInteractionMode),
+    workspaceStrategy: Schema.optional(
+      OrchestrationV2ThreadLaunchWorkspaceStrategy.annotate({
+        description:
+          "Choose where this thread runs before starting its agent: worktree creates and binds a new checkout from baseRef; existing_worktree binds worktreePath, which must be one of the project's git worktrees; root uses the project checkout. Omitted means root, not the caller's worktree. For a PR stack use the parent branch as baseRef and startFromOrigin:false. Uncommitted changes are not copied.",
+      }),
+    ),
+    message: Schema.optional(
+      Schema.String.check(Schema.isMaxLength(120000)).annotate({
+        description:
+          "First task prompt, delivered after workspace preparation. Omit message and attachments to create an idle thread.",
+      }),
+    ),
+    attachments: Schema.optional(Schema.Array(McpAttachmentInput).check(Schema.isMaxLength(8))),
+  }),
   success: Schema.Struct({
     threadId: ThreadId,
     projectId: ProjectId,
@@ -125,40 +150,10 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
   ],
 })
   .annotate(Tool.Destructive, true)
-  .annotate(Tool.OpenWorld, true)
-  .annotate(Tool.Strict, true);
-
-const OverseerThreadLaunchTool = Tool.make("t3_thread_launch", {
-  ...shared,
-  description: oversightLaunchDescription(ThreadLaunchTool.description ?? ""),
-  parameters: OverseerLaunchParameters,
-  success: Schema.Struct({
-    ...ThreadLaunchTool.successSchema.fields,
-    linkId: Schema.optional(Schema.String),
-  }),
-  failure: Schema.Struct({
-    ...OrchestratorMcpFailure.fields,
-    linkId: Schema.optional(Schema.String),
-    threadId: Schema.optional(ThreadId),
-    projectId: Schema.optional(ProjectId),
-  }),
-  dependencies: [
-    ...shared.dependencies,
-    ThreadLaunchService.ThreadLaunchService,
-    ManagedProjectFolders.ManagedProjectFolders,
-    GitVcsDriver.GitVcsDriver,
-    FileSystem.FileSystem,
-    ServerConfig.ServerConfig,
-    ServerSettings.ServerSettingsService,
-    OverseerLaunch.OverseerLaunchService,
-  ],
-})
-  .annotate(Tool.Destructive, true)
-  .annotate(Tool.OpenWorld, true)
-  .annotate(Tool.Strict, true);
+  .annotate(Tool.OpenWorld, true);
 
 export const ProjectToolkitOverseer = Toolkit.make(
-  OverseerThreadLaunchTool,
+  extendThreadLaunch(ThreadLaunchTool),
   ProjectListTool,
   ProjectReadTool,
   ProjectCreateTool,
