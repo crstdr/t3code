@@ -192,7 +192,7 @@ it.effect(
       );
       for (const field of ["linkId", "threadId", "projectId"])
         assert.property(unfinished.encodedResult, field);
-    }).pipe(Effect.provide(harness()), Effect.provide(NodeCrypto.layer)),
+    }).pipe(Effect.provide(Layer.merge(harness(), NodeCrypto.layer))),
 );
 
 it.effect("rejects unsupported observer and target adapters before reserving", () =>
@@ -559,9 +559,10 @@ it.effect.each(["thread.create", "message.dispatch"])(
                   ? Effect.void
                   : Effect.gen(function* () {
                       const sql = yield* SqlClient.SqlClient;
-                      yield* sql
-                        .unsafe(`VACUUM INTO '${snapshot.replaceAll("'", "''")}'`)
-                        .pipe(Effect.orDie);
+                      yield* sql.unsafe(`VACUUM INTO '${snapshot.replaceAll("'", "''")}'`).pipe(
+                        Effect.orDie,
+                        Effect.onError((cause) => Deferred.failCause(captured, cause)),
+                      );
                       yield* Deferred.succeed(captured, undefined);
                       yield* Deferred.await(hold);
                     }),
@@ -649,9 +650,10 @@ it.effect("does not provision a recorded worktree again after a crash", () =>
                   ? Effect.void
                   : Effect.gen(function* () {
                       const sql = yield* SqlClient.SqlClient;
-                      yield* sql
-                        .unsafe(`VACUUM INTO '${snapshot.replaceAll("'", "''")}'`)
-                        .pipe(Effect.orDie);
+                      yield* sql.unsafe(`VACUUM INTO '${snapshot.replaceAll("'", "''")}'`).pipe(
+                        Effect.orDie,
+                        Effect.onError((cause) => Deferred.failCause(captured, cause)),
+                      );
                       yield* Deferred.succeed(captured, undefined);
                       yield* Deferred.await(hold);
                     }),
@@ -715,9 +717,10 @@ it.effect.each([
           ? Effect.void
           : Effect.gen(function* () {
               const sql = yield* SqlClient.SqlClient;
-              yield* sql
-                .unsafe(`VACUUM INTO '${snapshot.replaceAll("'", "''")}'`)
-                .pipe(Effect.orDie);
+              yield* sql.unsafe(`VACUUM INTO '${snapshot.replaceAll("'", "''")}'`).pipe(
+                Effect.orDie,
+                Effect.onError((cause) => Deferred.failCause(captured, cause)),
+              );
               yield* Deferred.succeed(captured, undefined);
               yield* Deferred.await(hold);
             }),
