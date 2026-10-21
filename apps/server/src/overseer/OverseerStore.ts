@@ -145,6 +145,7 @@ export class OverseerStore extends Context.Service<
     ) => StoreResult<ReadonlyArray<string>>;
     readonly record: (input: RecordInput) => StoreResult<boolean>;
     readonly settleCompletion: (linkId: string, sourceId: string) => StoreResult<boolean>;
+    readonly deferCompletion: (linkId: string, sourceId: string) => StoreResult<boolean>;
     readonly withdraw: (key: OccurrenceKey) => StoreResult<boolean>;
     readonly pendingCandidates: (
       observer: ThreadId,
@@ -256,6 +257,8 @@ const make = Effect.gen(function* () {
     yield* invalidateLink(linkId);
     yield* sql`UPDATE overseer_occurrences SET disposition = 'withdrawn', batch_number = NULL
       WHERE link_id = ${linkId} AND disposition = 'pending'`;
+    yield* sql`DELETE FROM overseer_background_owners WHERE link_id = ${linkId}`;
+    yield* sql`DELETE FROM overseer_work_runs WHERE link_id = ${linkId}`;
     yield* dirty(row.observer_thread_id);
     return true;
   });
@@ -461,6 +464,22 @@ const make = Effect.gen(function* () {
           WHERE link_id = ${linkId} AND kind = 'completion' AND source_id = ${sourceId}
             AND ready = 0 AND disposition = 'pending' RETURNING *`;
           if (!rows[0]) return false;
+          yield* dirty(rows[0].observer_thread_id);
+          return true;
+        }),
+      );
+    }),
+    deferCompletion: Effect.fn("OverseerStore.deferCompletion")(function* (linkId, sourceId) {
+      return yield* transaction(
+        "deferCompletion",
+        Effect.gen(function* () {
+          const rows = yield* sql<OccurrenceRow>`SELECT * FROM overseer_occurrences
+            WHERE link_id = ${linkId} AND kind = 'completion' AND source_id = ${sourceId}
+              AND disposition = 'pending' AND ready = 1`;
+          if (!rows[0]) return false;
+          yield* invalidateOccurrence(rows[0]);
+          yield* sql`UPDATE overseer_occurrences SET ready = 0
+            WHERE link_id = ${linkId} AND kind = 'completion' AND source_id = ${sourceId}`;
           yield* dirty(rows[0].observer_thread_id);
           return true;
         }),
@@ -801,6 +820,8 @@ const make = Effect.gen(function* () {
       "clearFeatureData",
       Effect.gen(function* () {
         yield* sql`DELETE FROM overseer_occurrences`;
+        yield* sql`DELETE FROM overseer_background_owners`;
+        yield* sql`DELETE FROM overseer_work_runs`;
         yield* sql`DELETE FROM overseer_attempts`;
         yield* sql`DELETE FROM overseer_batches`;
         yield* sql`DELETE FROM overseer_links`;

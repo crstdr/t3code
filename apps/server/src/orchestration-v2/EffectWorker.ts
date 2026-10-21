@@ -27,6 +27,7 @@ import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as OverseerWakeFacts from "../overseer/OverseerWakeFacts.ts";
 import { continueRestartedRun } from "./RestartContinuation.ts";
 
 export class OrchestrationEffectExecutionError extends Schema.TaggedError<OrchestrationEffectExecutionError>()(
@@ -588,6 +589,20 @@ export const layerWithOptions = (
     Effect.gen(function* () {
       const outbox = yield* EffectOutbox.EffectOutboxV2;
       const executor = yield* OrchestrationEffectExecutorV2;
+      // Runtime composition supplies wake facts; standalone feature-free workers need not construct them.
+      const overseerWakeFacts = yield* Effect.serviceOption(OverseerWakeFacts.OverseerWakeFacts);
+      const reconcileOverseerWork = (effect: EffectOutbox.OrchestrationEffectV2) =>
+        effect.request.type === "provider-runtime.continue" && Option.isSome(overseerWakeFacts)
+          ? overseerWakeFacts.value.continuationSettled(effect.request.sourceRunId).pipe(
+              Effect.catchTags({
+                WakeFactsError: (cause) =>
+                  Effect.logWarning("Overseer work reconciliation remains pending", {
+                    effectId: effect.id,
+                    cause,
+                  }),
+              }),
+            )
+          : Effect.void;
       const workerId = options.workerId ?? `orchestration-v2:${process.pid}`;
       const leaseDurationMs = Math.max(1, options.leaseDurationMs ?? 30_000);
       const maxAttempts = Math.max(1, options.maxAttempts ?? 5);
@@ -753,7 +768,10 @@ export const layerWithOptions = (
                 });
               }
               return true;
-            }).pipe(Effect.onError((cause) => recoverPostSuccessSettlement(effect, cause)));
+            }).pipe(
+              Effect.onError((cause) => recoverPostSuccessSettlement(effect, cause)),
+              Effect.tap(() => reconcileOverseerWork(effect)),
+            );
           }
 
           const error = Cause.pretty(exit.cause);
@@ -789,6 +807,8 @@ export const layerWithOptions = (
               cause: "The worker no longer owns the effect lease.",
             });
           }
+          if (nonRetryable || effect.attemptCount >= maxAttempts)
+            yield* reconcileOverseerWork(effect);
           return true;
         },
         (effect, _excludeRestartContinuations?: boolean) =>

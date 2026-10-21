@@ -818,7 +818,18 @@ it.effect.each([
             ),
           ),
         );
-        yield* runtimeRecovery.recover;
+        yield* enabled(runtimeRecovery.recover);
+        const sql = yield* SqlClient.SqlClient;
+        const sources = yield* sql<{ readonly source_id: string; readonly ready: number }>`
+          SELECT source_id, ready FROM overseer_occurrences
+          WHERE link_id = ${before!.link_id} AND kind = 'completion'`;
+        assert.equal(sources.length, 1);
+        assert.equal(sources[0]!.ready, 1);
+        assert.equal(before!.launch_accepted, 0);
+        assert.equal(
+          (yield* store.reservationFor(observer, request.clientRequestId))!.launch_accepted,
+          0,
+        );
       }
       const recovered = yield* enabled(saga.recover);
       const row = yield* store.reservationFor(observer, request.clientRequestId);

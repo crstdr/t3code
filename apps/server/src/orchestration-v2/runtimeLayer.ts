@@ -50,6 +50,7 @@ import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as OverseerLaunch from "../overseer/OverseerLaunchService.ts";
 import * as OverseerStore from "../overseer/OverseerStore.ts";
+import * as OverseerWakeFacts from "../overseer/OverseerWakeFacts.ts";
 import * as ThreadLaunchService from "./ThreadLaunchService.ts";
 import * as ThreadLifecycleService from "./ThreadLifecycleService.ts";
 import * as ThreadForkService from "./ThreadForkService.ts";
@@ -335,7 +336,7 @@ const layerEffectExecutorProvided = EffectWorker.layerExecutor.pipe(
   ),
 );
 const layerEffectWorkerProvided = EffectWorker.layer.pipe(
-  Layer.provide(Layer.merge(layerStores, layerEffectExecutorProvided)),
+  Layer.provide(Layer.mergeAll(layerStores, layerEffectExecutorProvided, OverseerWakeFacts.layer)),
 );
 const layerProviderRuntimeRecoveryProvided = ProviderRuntimeRecoveryService.layer.pipe(
   Layer.provide(
