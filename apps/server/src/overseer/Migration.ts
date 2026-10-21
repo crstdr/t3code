@@ -94,6 +94,5 @@ export default Effect.gen(function* () {
     )
   `;
   yield* sql`CREATE INDEX overseer_attempts_run_idx ON overseer_attempts(run_id, message_id)`;
-  yield* sql`CREATE INDEX overseer_attempts_run_attempt_idx ON overseer_attempts(run_attempt_id, message_id)`;
   yield* sql`CREATE UNIQUE INDEX overseer_attempts_pending_idx ON overseer_attempts(observer_thread_id) WHERE state = 'pending'`;
 });
