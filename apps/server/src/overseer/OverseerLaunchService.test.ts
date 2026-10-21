@@ -32,6 +32,9 @@ import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Receipts from "../orchestration-v2/CommandReceiptStore.ts";
 import * as Replay from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
+import * as Recovery from "../orchestration-v2/ProviderRuntimeRecoveryService.ts";
+import * as Projections from "../orchestration-v2/ProjectionStore.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Store from "./OverseerStore.ts";
 import * as Saga from "./OverseerLaunchService.ts";
 import { OverseerLaunchParameters, LaunchParameters } from "./OverseerLaunchInput.ts";
@@ -698,6 +701,7 @@ it.effect.each([
   "message.dispatch",
   "prepared-or-scheduled",
   "prepared-run.release",
+  "startup-after-message",
 ])("recovers a pre-teardown snapshot at %s using fresh services and exact receipts", (step) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -707,7 +711,7 @@ it.effect.each([
     const hold = yield* Deferred.make<void>();
     const layer = harness({
       milestone: (milestone) =>
-        milestone !== step
+        milestone !== (step === "startup-after-message" ? "message.dispatch" : step)
           ? Effect.void
           : Effect.gen(function* () {
               const sql = yield* SqlClient.SqlClient;
@@ -732,6 +736,16 @@ it.effect.each([
       const saga = yield* Saga.OverseerLaunchService;
       const store = yield* Store.OverseerStore;
       const before = yield* store.reservationFor(observer, request.clientRequestId);
+      if (step === "startup-after-message") {
+        const runtimeRecovery = yield* Recovery.ProviderRuntimeRecoveryService.pipe(
+          Effect.provide(
+            Recovery.layer.pipe(
+              Layer.provide(Layer.mergeAll(Projections.layer, Outbox.layer, IdAllocator.layer)),
+            ),
+          ),
+        );
+        yield* runtimeRecovery.recover;
+      }
       const recovered = yield* enabled(saga.recover);
       const row = yield* store.reservationFor(observer, request.clientRequestId);
       const sql = yield* SqlClient.SqlClient;
@@ -766,6 +780,21 @@ it.effect.each([
         );
         assert.equal(projection.messages.length, 1);
         assert.equal(projection.messages[0]?.id, row!.launch_message_id);
+        assert.equal(row?.state, "active");
+        if (step === "startup-after-message") {
+          assert.equal(projection.runs.length, 1);
+          assert.equal(projection.runs[0]?.status, "cancelled");
+          assert.equal(
+            (yield* sql<{
+              count: number;
+            }>`SELECT COUNT(*) AS count FROM orchestration_v2_projection_threads`)[0]?.count,
+            2,
+          );
+          assert.equal(
+            (yield* store.linksForEndpoint(ThreadId.make(row!.target_thread_id))).length,
+            1,
+          );
+        }
         assert.deepEqual(yield* enabled(saga.recover), { resumed: 0, pending: 0 });
       }
     }).pipe(Effect.provide(harness({ database: Sqlite.layerFromPath(snapshot) })));
