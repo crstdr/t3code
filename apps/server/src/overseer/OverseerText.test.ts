@@ -14,7 +14,7 @@ import { createPendingAttachmentId } from "../attachmentStore.ts";
 import * as Config from "../config.ts";
 import * as Claims from "../orchestration-v2/AttachmentClaims.ts";
 import { harness } from "./OverseerLaunch.testkit.ts";
-import pinnedCatalog from "./fixtures/upstream-96f09c6558-project-catalog.json" with { type: "json" };
+import pinnedCatalog from "./fixtures/upstream-11adcb0e25-project-catalog.json" with { type: "json" };
 import pinnedAttachmentFailures from "./fixtures/upstream-96f09c6558-attachment-failures.json" with { type: "json" };
 import { Tool } from "effect/ai";
 import { ProjectToolkit, ProjectToolkitOverseer } from "../mcp/toolkits/project/tools.ts";
@@ -46,7 +46,7 @@ const renderCatalog = Effect.fn("test.overseer.catalog")(function* (overseen = f
   );
 });
 
-// Captured by toolkitRegistration from git-show 96f09c6558:.../project/tools.ts
+// Captured by toolkitRegistration from git-show 11adcb0e25:.../project/tools.ts
 // (blob 2114565d8201ea11c085f43a7c1c3e17b0c7d7ea), not Tool.getJsonSchema.
 it.effect("the disabled project's actual MCP catalog is byte-identical to pinned upstream", () =>
   Effect.gen(function* () {
