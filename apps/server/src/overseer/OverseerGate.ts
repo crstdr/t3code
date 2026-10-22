@@ -24,8 +24,10 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const gate = yield* Semaphore.make(1);
     return OverseerGate.of({
-      // Lock order: existing thread lock (if any), feature gate, SQL transaction.
-      // No operation holding this gate may acquire a thread lock; send must not
+      // Lock order: thread lock (if any) → feature gate → SQL transaction → publication permit.
+      // Commit releases SQL/gate before ordered publication; advisory persistence runs
+      // after the publication permit is released. Never acquire the gate while holding
+      // that permit, or a thread lock while holding the gate. Native send must not
       // perform gated work or await an ingestion fiber before outbound enqueue. Nested SQL-only
       // Store calls inherit Inside rather than re-entering the non-reentrant gate.
       // EventSink already spans commits, including high-frequency token chunks.

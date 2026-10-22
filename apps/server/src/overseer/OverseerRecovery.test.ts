@@ -397,6 +397,53 @@ it.effect(
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
+it.effect.each(["abandon", "failed_run"] as const)(
+  "a failure-induced %s hold survives fresh SQLite recovery until explicit queue control",
+  (failure) =>
+    Effect.gen(function* () {
+      const path = `${yield* directory}/state.sqlite`;
+      yield* Effect.gen(function* () {
+        const f = yield* setup();
+        yield* f.question(yield* f.start(1), "pending");
+        const row = yield* f.prepare();
+        const identity = yield* f.freeze(row);
+        if (failure === "abandon") yield* f.transport.abandonUnsent(identity.messageId);
+        const projection = yield* Projections.ProjectionStoreV2;
+        const wake = (yield* projection.getThreadProjection(observer)).runs.find(
+          (run) => run.id === identity.runId,
+        )!;
+        yield* f.write([
+          {
+            type: "run.updated",
+            threadId: observer,
+            payload: { ...wake, status: "failed", completedAt: yield* DateTime.now },
+          },
+        ]);
+        assert.equal((yield* f.store.mailbox(observer))!.hold_mask, 24);
+      }).pipe(enabled, Effect.provide(atPath(path)));
+      yield* Effect.gen(function* () {
+        const f = yield* setup({ seed: false, eventPrefix: "failure-reopen:" });
+        yield* normalize;
+        yield* recover;
+        assert.equal((yield* f.store.mailbox(observer))!.hold_mask & 16, 16);
+        yield* f.sync(() => Effect.die("restart is not an explicit failure rearm"));
+        assert.equal(
+          (yield* f.sql`SELECT 1 FROM overseer_occurrences WHERE disposition = 'accepted'`).length,
+          0,
+        );
+        yield* f.write([], "queue.resume", observer);
+        assert.equal((yield* f.store.mailbox(observer))!.hold_mask, 0);
+        let dispatched = false;
+        yield* f.sync(() =>
+          Effect.sync(() => {
+            dispatched = true;
+          }),
+        );
+        assert.isTrue(dispatched);
+      }).pipe(enabled, Effect.provide(atPath(path)));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.effect.each(["stop", "unlink", "archive", "delete", "project_delete"] as const)(
   "recovery preserves the %s fence instead of resurrecting uncertain input",
   (fence) =>

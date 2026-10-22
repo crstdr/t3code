@@ -2,14 +2,14 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Schema from "effect/Schema";
+import * as OverseerFeature from "./OverseerFeature.ts";
+import * as Policy from "./OverseerWakePolicy.ts";
 
 const encode = Schema.encodeSync(
   Schema.fromJsonString(
     Schema.Struct({ type: Schema.Literal("overseer.mailbox.flush"), generation: Schema.String }),
   ),
 );
-import * as OverseerFeature from "./OverseerFeature.ts";
-import * as Policy from "./OverseerWakePolicy.ts";
 
 // Called only inside the mailbox mutation's SQL transaction. Pending folds arrivals;
 // running requires a successor, independently of lease settlement or outbox retention.

@@ -149,9 +149,11 @@ const make = Effect.gen(function* () {
       return true;
     yield* retire(message);
     const observer = ThreadId.make(row.observer_thread_id);
-    if (core?.status === "failed" && core.message === message)
+    // Availability recovery may clear provider, but failure requires explicit rearm.
+    if (core?.status === "failed" && core.message === message) {
       yield* store.hold(observer, "provider");
-    else yield* store.touch(observer);
+      yield* store.hold(observer, "authorization");
+    } else yield* store.touch(observer);
     return false;
   });
   const valid = Effect.fn("OverseerTransport.valid")(function* (row: TransportRow) {
@@ -204,6 +206,7 @@ const make = Effect.gen(function* () {
             if (row?.phase !== "frozen") return;
             yield* retire(message);
             yield* store.hold(ThreadId.make(row.observer_thread_id), "provider");
+            yield* store.hold(ThreadId.make(row.observer_thread_id), "authorization");
           }),
         ),
       );

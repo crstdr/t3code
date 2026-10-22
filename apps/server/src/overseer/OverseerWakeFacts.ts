@@ -93,6 +93,11 @@ export class OverseerWakeFacts extends Context.Service<
       events: ReadonlyArray<OrchestrationV2StoredEvent>,
       context?: CommitContext,
     ) => Effect.Effect<void>;
+    // Advisory SQL persistence must run after the EventSink publication permit is released.
+    readonly warnUnconfirmed: (
+      events: ReadonlyArray<OrchestrationV2StoredEvent>,
+      commandType?: string,
+    ) => Effect.Effect<void>;
     readonly notifyProjectEvent: (event: ApplicationProjectEvent) => Effect.Effect<void>;
     readonly awaitAvailable: Effect.Effect<void>;
     // No new occurrence: reconcile a durable candidate after an eventless continuation disposition.
@@ -489,19 +494,19 @@ const make = Effect.gen(function* () {
         events.some(
           ({ event }) => event.type === "message.updated" && explicitMessage(event.payload),
         ))
-        ? notify.pipe(
-            Effect.andThen(
-              transport.warnUnconfirmed(events, context?.commandType).pipe(
-                Effect.catchCause((cause) =>
-                  Cause.hasInterruptsOnly(cause)
-                    ? Effect.interrupt
-                    : Effect.logWarning("Overseer receipt warning could not be persisted", {
-                        cause,
-                      }),
-                ),
+        ? notify
+        : Effect.void,
+    warnUnconfirmed: (events, commandType) =>
+      events.some(relevant)
+        ? transport
+            .warnUnconfirmed(events, commandType)
+            .pipe(
+              Effect.catchCause((cause) =>
+                Cause.hasInterruptsOnly(cause)
+                  ? Effect.interrupt
+                  : Effect.logWarning("Overseer receipt warning could not be persisted", { cause }),
               ),
-            ),
-          )
+            )
         : Effect.void,
     notifyProjectEvent: (event) => (event.type === "project.deleted" ? notify : Effect.void),
     awaitAvailable: Queue.take(available),

@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, it } from "@effect/vitest";
+import { assert, it, vi } from "@effect/vitest";
 import {
   CommandId,
   EventId,
@@ -304,6 +304,110 @@ const setup = Effect.fn("test.wakeFacts.setup")(function* () {
   });
   return { sql, sink, store, facts, write, reserve, start, finish, question };
 });
+
+it.effect(
+  "releases publication before warning persistence while a second writer holds the feature gate",
+  () =>
+    Effect.gen(function* () {
+      const { start, sink, facts } = yield* setup();
+      const run = makeRun(1);
+      yield* start(run);
+      const events = yield* Events.EventStoreV2;
+      const publishing = yield* Deferred.make<void>();
+      const releasePublication = yield* Deferred.make<void>();
+      const secondTransaction = yield* Deferred.make<void>();
+      const order: string[] = [];
+      let warningWrites = 0;
+      const publish = events.publishCommitted;
+      const notify = facts.notifyThreadEvents;
+      const record = facts.threadEvents;
+      const publishSpy = vi.spyOn(events, "publishCommitted").mockImplementation((stored) =>
+        Effect.gen(function* () {
+          const id = stored.flatMap((row) => ("event" in row ? [row.event.id] : []))[0];
+          if (id === "publication:A") {
+            yield* Deferred.succeed(publishing, undefined);
+            yield* Deferred.await(releasePublication);
+          }
+          yield* publish(stored);
+          order.push(`publish:${id}`);
+        }),
+      );
+      const notifySpy = vi
+        .spyOn(facts, "notifyThreadEvents")
+        .mockImplementation((stored, context) =>
+          notify(stored, context).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                order.push(`notify:${stored[0]!.event.id}`);
+              }),
+            ),
+          ),
+        );
+      const recordSpy = vi
+        .spyOn(facts, "threadEvents")
+        .mockImplementation((stored, context) =>
+          record(stored, context).pipe(
+            Effect.tap(() =>
+              stored[0]?.event.id === "publication:B"
+                ? Deferred.succeed(secondTransaction, undefined)
+                : Effect.void,
+            ),
+          ),
+        );
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          publishSpy.mockRestore();
+          notifySpy.mockRestore();
+          recordSpy.mockRestore();
+        }),
+      );
+      const capture: Statement.Transformer = (statement) => {
+        if (/UPDATE overseer_transports\s+SET unconfirmed_logged_at/.test(statement.compile()[0]))
+          warningWrites++;
+        return Effect.succeed(statement);
+      };
+      yield* Effect.gen(function* () {
+        const first = yield* sink
+          .write({
+            events: [
+              {
+                id: EventId.make("publication:A"),
+                type: "run.updated",
+                threadId: target,
+                occurredAt: now,
+                payload: { ...run, status: "completed", completedAt: now },
+              },
+            ],
+          })
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(publishing);
+        const second = yield* sink
+          .write({
+            events: [
+              {
+                id: EventId.make("publication:B"),
+                type: "thread.metadata-updated",
+                threadId: observer,
+                occurredAt: now,
+                payload: makeThread(observer, observerProject),
+              },
+            ],
+          })
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(secondTransaction);
+        yield* Deferred.succeed(releasePublication, undefined);
+        yield* Fiber.join(first);
+        yield* Fiber.join(second);
+      }).pipe(Effect.provideService(Statement.CurrentTransformer, capture));
+      assert.deepEqual(order, [
+        "publish:publication:A",
+        "notify:publication:A",
+        "publish:publication:B",
+        "notify:publication:B",
+      ]);
+      assert.equal(warningWrites, 1);
+    }).pipe(Effect.scoped, enabled, Effect.provide(layerTest)),
+);
 
 it.effect("records every explicit work identity in source order before launch acceptance", () =>
   Effect.gen(function* () {

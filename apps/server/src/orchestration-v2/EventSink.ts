@@ -472,6 +472,7 @@ const layerBase: Layer.Layer<
             yield* publishStoredEvents(committed, outcomes);
           }),
       );
+      yield* overseerWakeFacts.warnUnconfirmed(committed);
       return committed;
     });
 
@@ -531,6 +532,10 @@ const layerBase: Layer.Layer<
               }
               yield* publishStoredEvents(result.storedEvents, result.outcomes);
             }),
+        ).pipe(
+          Effect.tap((result) =>
+            result.committed ? overseerWakeFacts.warnUnconfirmed(result.storedEvents) : Effect.void,
+          ),
         );
       },
     );
@@ -591,6 +596,10 @@ const layerBase: Layer.Layer<
           result.committed
             ? publishStoredEvents(result.storedEvents, result.outcomes)
             : Effect.void,
+      ).pipe(
+        Effect.tap((result) =>
+          result.committed ? overseerWakeFacts.warnUnconfirmed(result.storedEvents) : Effect.void,
+        ),
       );
     });
 
@@ -627,6 +636,10 @@ const layerBase: Layer.Layer<
           result.committed
             ? publishStoredEvents(result.storedEvents, result.outcomes)
             : Effect.void,
+      ).pipe(
+        Effect.tap((result) =>
+          result.committed ? overseerWakeFacts.warnUnconfirmed(result.storedEvents) : Effect.void,
+        ),
       );
     });
 
@@ -713,6 +726,8 @@ const layerBase: Layer.Layer<
             }
           }),
       );
+      if (result.committed)
+        yield* overseerWakeFacts.warnUnconfirmed(result.storedEvents, input.commandType);
       return {
         receipt: result.receipt,
         storedEvents: result.storedEvents,
