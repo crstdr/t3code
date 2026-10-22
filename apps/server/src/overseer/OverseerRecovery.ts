@@ -25,6 +25,7 @@ import * as Facts from "./OverseerWakeFacts.ts";
 import * as Transport from "./OverseerTransport.ts";
 import * as Flush from "./OverseerFlush.ts";
 import * as Gate from "./OverseerGate.ts";
+import * as Policy from "./OverseerWakePolicy.ts";
 import { OverseerNoticeGrant } from "./OverseerNoticeGrant.ts";
 
 export class RecoveryError extends Schema.TaggedError<RecoveryError>()("OverseerRecoveryError", {
@@ -227,6 +228,11 @@ const make = Effect.gen(function* () {
     if (!providerEnabled && (box.hold_mask & 8) === 0) yield* store.hold(observer, "provider");
     else if (providerEnabled && (box.hold_mask & 8) !== 0)
       yield* store.resume(observer, "provider");
+    yield* gate.commit(
+      sql.withTransaction(
+        Policy.syncIdleState(observer).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+      ),
+    );
     const pending = (yield* store.mailbox(observer))!;
     if (pending.revision > pending.processed_revision)
       yield* gate.commit(

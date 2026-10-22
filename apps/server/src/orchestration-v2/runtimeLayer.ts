@@ -55,6 +55,8 @@ import * as OverseerMailbox from "../overseer/OverseerMailbox.ts";
 import * as OverseerTransport from "../overseer/OverseerTransport.ts";
 import * as OverseerContinuation from "../overseer/OverseerContinuation.ts";
 import * as OverseerRecovery from "../overseer/OverseerRecovery.ts";
+import * as OverseerPreferences from "../overseer/OverseerPreferences.ts";
+import * as OverseerIdleScheduler from "../overseer/OverseerIdleScheduler.ts";
 import * as ThreadLaunchService from "./ThreadLaunchService.ts";
 import * as ThreadLifecycleService from "./ThreadLifecycleService.ts";
 import * as ThreadForkService from "./ThreadForkService.ts";
@@ -396,6 +398,8 @@ export const layerProduction = Layer.mergeAll(
   layerManagedProjectFoldersProvided,
   layerThreadLaunchProvided,
   layerOverseerLaunchProvided,
+  OverseerPreferences.layer,
+  OverseerIdleScheduler.layerWorker,
   OverseerRecovery.layer.pipe(
     Layer.provide(Layer.mergeAll(layerOrchestratorProvided, layerProviderAdapterRegistryProvided)),
   ),

@@ -13,6 +13,11 @@ import * as Layer from "effect/Layer";
 import * as Statement from "effect/sql/Statement";
 import * as Logger from "effect/Logger";
 import * as DateTime from "effect/DateTime";
+import * as TestClock from "effect/testing/TestClock";
+import * as Preferences from "./OverseerPreferences.ts";
+import * as Policy from "./OverseerWakePolicy.ts";
+import * as Idle from "./OverseerIdleScheduler.ts";
+import { wakeText } from "./OverseerText.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Settings from "../serverSettings.ts";
 import * as Projections from "../orchestration-v2/ProjectionStore.ts";
@@ -38,6 +43,49 @@ const normalize = Effect.gen(function* () {
 }).pipe(Effect.provide(Layer.mergeAll(IdAllocator.layer, Settings.layerTest())));
 const directory = Effect.flatMap(FileSystem.FileSystem, (fs) =>
   fs.makeTempDirectoryScoped({ prefix: "t3-overseer-recovery-" }),
+);
+
+it.effect(
+  "fresh SQLite services recover the submitted idle check-in without inventing an occurrence",
+  () =>
+    Effect.gen(function* () {
+      const path = `${yield* directory}/state.sqlite`;
+      const idleLayers = () =>
+        Layer.mergeAll(Preferences.layer, Idle.layer).pipe(Layer.provideMerge(atPath(path)));
+      const before = yield* Effect.gen(function* () {
+        const fixture = yield* setup();
+        const preferences = yield* Preferences.OverseerPreferences;
+        yield* preferences.configure(observer, {
+          ...Policy.defaults,
+          idleEnabled: true,
+          idleMinutes: 10,
+        });
+        yield* TestClock.adjust("10 minutes");
+        yield* (yield* Idle.OverseerIdleScheduler).runDue;
+        yield* fixture.sync(() => Effect.void);
+        const row = (yield* fixture.transport.open(observer))!;
+        const identity = yield* fixture.freeze(row);
+        assert.isTrue(yield* fixture.transport.submit(identity));
+        return row;
+      }).pipe(enabled, Effect.provide(idleLayers()));
+      yield* Effect.gen(function* () {
+        const fixture = yield* setup({ seed: false, eventPrefix: "idle-reopen:" });
+        yield* normalize;
+        yield* recover;
+        yield* fixture.sync(() => Effect.void);
+        const row = (yield* fixture.transport.open(observer))!;
+        assert.equal(row.batch_number, before.batch_number);
+        assert.notEqual(row.message_id, before.message_id);
+        assert.equal(row.text, wakeText.W3);
+        assert.equal(row.members_json, "[]");
+        assert.deepEqual(yield* fixture.sql`SELECT * FROM overseer_occurrences`, []);
+        const identity = yield* fixture.freeze(row, 101);
+        assert.isTrue(yield* fixture.transport.submit(identity));
+        assert.isTrue(yield* fixture.transport.receipt({ ...identity, kind: "codex_response" }));
+        yield* recover;
+        assert.isUndefined(yield* fixture.transport.open(observer));
+      }).pipe(enabled, Effect.provide(idleLayers()));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
 it.effect.each([

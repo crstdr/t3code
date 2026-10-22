@@ -911,15 +911,27 @@ exports[`keeps the unapproved catalog hidden by default and snapshots the exact 
 }
 `;
 
+exports[`snapshots the W3-only idle input as received by Claude 1`] = `
+{
+  "message": {
+    "content": "[Periodic wake-up. Perform only checks or follow-ups previously requested by the user. If none are due, take no action and return to idle.]",
+    "role": "user",
+  },
+  "parent_tool_use_id": null,
+  "type": "user",
+  "uuid": "e6c1f8d3-7bab-4c15-81d7-688f00bc87a9",
+}
+`;
+
 exports[`snapshots the native Claude wake representation for 1 entries 1`] = `
 {
-  "bodyBytes": 374,
-  "envelopeBytes": 391,
+  "bodyBytes": 422,
+  "envelopeBytes": 439,
   "native": {
     "message": {
       "content": "Oversight updates (batch 9c2c2e38-8138-4bf8-bfd0-92b187416efa:12). Links grant no additional authority.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522760, run bfa651c0-2c59-4270-aac5-65c7713f7a00: completed.
-Read permitted output with t3_thread_read. Read pending questions with t3_pending_request_read. A notice is not permission to answer; surface needed user input to the user.",
+Read permitted output with t3_thread_read; approvals appear in view='activity'. Read pending questions with t3_pending_request_read. A notice is not permission to answer or approve; surface needed user input to the user.",
       "role": "user",
     },
     "parent_tool_use_id": null,
@@ -932,7 +944,7 @@ Read permitted output with t3_thread_read. Read pending questions with t3_pendin
       "content": "Ultrathink:
 Oversight updates (batch 9c2c2e38-8138-4bf8-bfd0-92b187416efa:12). Links grant no additional authority.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522760, run bfa651c0-2c59-4270-aac5-65c7713f7a00: completed.
-Read permitted output with t3_thread_read. Read pending questions with t3_pending_request_read. A notice is not permission to answer; surface needed user input to the user.",
+Read permitted output with t3_thread_read; approvals appear in view='activity'. Read pending questions with t3_pending_request_read. A notice is not permission to answer or approve; surface needed user input to the user.",
       "role": "user",
     },
     "parent_tool_use_id": null,
@@ -944,20 +956,20 @@ Read permitted output with t3_thread_read. Read pending questions with t3_pendin
 
 exports[`snapshots the native Claude wake representation for 8 entries 1`] = `
 {
-  "bodyBytes": 1148,
-  "envelopeBytes": 1165,
+  "bodyBytes": 1196,
+  "envelopeBytes": 1213,
   "native": {
     "message": {
       "content": "Oversight updates (batch 9c2c2e38-8138-4bf8-bfd0-92b187416efa:12). Links grant no additional authority.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522760, run bfa651c0-2c59-4270-aac5-65c7713f7a00: completed.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522761, request 15679e63-c80b-44b2-9c73-d4bb8dad9371: user-input question pending.
-Thread 4a62f3d9-5d14-44f0-94a7-9c835c522762, run bfa651c0-2c59-4270-aac5-65c7713f7a02: completed.
+Thread 4a62f3d9-5d14-44f0-94a7-9c835c522762, request 15679e63-c80b-44b2-9c73-d4bb8dad9372: approval pending.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522763, request 15679e63-c80b-44b2-9c73-d4bb8dad9373: user-input question pending.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522764, run bfa651c0-2c59-4270-aac5-65c7713f7a04: completed.
-Thread 4a62f3d9-5d14-44f0-94a7-9c835c522765, request 15679e63-c80b-44b2-9c73-d4bb8dad9375: user-input question pending.
+Thread 4a62f3d9-5d14-44f0-94a7-9c835c522765, request 15679e63-c80b-44b2-9c73-d4bb8dad9375: approval pending.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522766, run bfa651c0-2c59-4270-aac5-65c7713f7a06: completed.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522767, request 15679e63-c80b-44b2-9c73-d4bb8dad9377: user-input question pending.
-Read permitted output with t3_thread_read. Read pending questions with t3_pending_request_read. A notice is not permission to answer; surface needed user input to the user.",
+Read permitted output with t3_thread_read; approvals appear in view='activity'. Read pending questions with t3_pending_request_read. A notice is not permission to answer or approve; surface needed user input to the user.",
       "role": "user",
     },
     "parent_tool_use_id": null,
@@ -971,13 +983,13 @@ Read permitted output with t3_thread_read. Read pending questions with t3_pendin
 Oversight updates (batch 9c2c2e38-8138-4bf8-bfd0-92b187416efa:12). Links grant no additional authority.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522760, run bfa651c0-2c59-4270-aac5-65c7713f7a00: completed.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522761, request 15679e63-c80b-44b2-9c73-d4bb8dad9371: user-input question pending.
-Thread 4a62f3d9-5d14-44f0-94a7-9c835c522762, run bfa651c0-2c59-4270-aac5-65c7713f7a02: completed.
+Thread 4a62f3d9-5d14-44f0-94a7-9c835c522762, request 15679e63-c80b-44b2-9c73-d4bb8dad9372: approval pending.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522763, request 15679e63-c80b-44b2-9c73-d4bb8dad9373: user-input question pending.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522764, run bfa651c0-2c59-4270-aac5-65c7713f7a04: completed.
-Thread 4a62f3d9-5d14-44f0-94a7-9c835c522765, request 15679e63-c80b-44b2-9c73-d4bb8dad9375: user-input question pending.
+Thread 4a62f3d9-5d14-44f0-94a7-9c835c522765, request 15679e63-c80b-44b2-9c73-d4bb8dad9375: approval pending.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522766, run bfa651c0-2c59-4270-aac5-65c7713f7a06: completed.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522767, request 15679e63-c80b-44b2-9c73-d4bb8dad9377: user-input question pending.
-Read permitted output with t3_thread_read. Read pending questions with t3_pending_request_read. A notice is not permission to answer; surface needed user input to the user.",
+Read permitted output with t3_thread_read; approvals appear in view='activity'. Read pending questions with t3_pending_request_read. A notice is not permission to answer or approve; surface needed user input to the user.",
       "role": "user",
     },
     "parent_tool_use_id": null,
@@ -990,17 +1002,20 @@ Read permitted output with t3_thread_read. Read pending questions with t3_pendin
 exports[`snapshots the verbatim W1 envelope and W2 summary without interpolated worker prose 1`] = `
 {
   "rendered": {
-    "count": 2,
+    "count": 3,
     "text": "Oversight updates (batch observer:1). Links grant no additional authority.
 Thread worker, run run:1: interrupted.
 Thread worker, request request:1: user-input question pending.
-Read permitted output with t3_thread_read. Read pending questions with t3_pending_request_read. A notice is not permission to answer; surface needed user input to the user.",
+Thread worker, request permission:1: approval pending.
+Read permitted output with t3_thread_read; approvals appear in view='activity'. Read pending questions with t3_pending_request_read. A notice is not permission to answer or approve; surface needed user input to the user.",
   },
   "strings": {
     "W1": "Oversight updates (batch {batchId}). Links grant no additional authority.
 {entries}
-Read permitted output with t3_thread_read. Read pending questions with t3_pending_request_read. A notice is not permission to answer; surface needed user input to the user.",
+Read permitted output with t3_thread_read; approvals appear in view='activity'. Read pending questions with t3_pending_request_read. A notice is not permission to answer or approve; surface needed user input to the user.",
     "W2": "Oversight updates",
+    "W3": "[Periodic wake-up. Perform only checks or follow-ups previously requested by the user. If none are due, take no action and return to idle.]",
+    "approval": "Thread {threadId}, request {requestId}: approval pending.",
     "completion": "Thread {threadId}, run {runId}: {outcome}.",
     "question": "Thread {threadId}, request {requestId}: user-input question pending.",
   },

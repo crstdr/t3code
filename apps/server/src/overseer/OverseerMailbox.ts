@@ -115,7 +115,11 @@ const make = Effect.gen(function* () {
         box = yield* storage(store.mailbox(observer));
         if (!box) return;
         const fence = { observerThreadId: observer, epoch: box.epoch, revision: box.revision };
-        const staged = yield* storage(store.stageBatch(fence));
+        let staged = yield* storage(store.stageBatch(fence));
+        if (staged.state === "idle" || staged.state === "blocked") {
+          const idle = yield* storage(store.stageIdleBatch(fence));
+          if (idle) staged = { state: "ready", batch: idle };
+        }
         if (staged.state !== "ready") {
           if (staged.state !== "busy" && current) {
             const runs = yield* storage(sql<{
@@ -136,6 +140,7 @@ const make = Effect.gen(function* () {
                 }),
               );
             yield* storage(transport.retire(MessageId.make(current.message_id)));
+            yield* storage(store.touch(observer));
           }
           if (staged.state === "idle") yield* storage(store.checkpoint(fence));
           return;
@@ -150,8 +155,8 @@ const make = Effect.gen(function* () {
           );
           const threadId = links[0]?.target_thread_id;
           if (!threadId) return;
-          if (member.kind === "question")
-            entries.push({ kind: "question", threadId, requestId: member.source_id });
+          if (member.kind !== "completion")
+            entries.push({ kind: member.kind, threadId, requestId: member.source_id });
           else {
             const outcome = yield* storage(
               facts.completionOutcome(member.link_id, member.source_id),
@@ -161,7 +166,10 @@ const make = Effect.gen(function* () {
           }
         }
         const batchId = `${observer}:${staged.batch.batch_number}`;
-        const rendered = renderWake(batchId, entries);
+        const rendered =
+          staged.batch.purpose === "idle"
+            ? { text: wakeText.W3, count: 0 }
+            : renderWake(batchId, entries);
         if (staged.batch.state === "frozen" && (!rendered || rendered.count !== members.length)) {
           yield* Effect.logWarning("Overseer frozen retry no longer fits its envelope", {
             observerThreadId: observer,
@@ -221,7 +229,12 @@ const make = Effect.gen(function* () {
               outcome: "updated",
               summary: wakeText.W2,
             },
-          }).pipe(Effect.provideService(OverseerNoticeGrant, { messageId, queued: false }));
+          }).pipe(
+            Effect.provideService(OverseerNoticeGrant, {
+              messageId,
+              queued: staged.batch.purpose === "idle",
+            }),
+          );
         }
       },
       Effect.catch((error) => (staleMailbox(error) ? Effect.void : Effect.fail(error))),

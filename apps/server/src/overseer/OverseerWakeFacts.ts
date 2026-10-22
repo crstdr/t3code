@@ -24,6 +24,7 @@ import * as OverseerStore from "./OverseerStore.ts";
 import * as OverseerTransport from "./OverseerTransport.ts";
 import * as EffectOutbox from "../orchestration-v2/EffectOutbox.ts";
 import * as OverseerGate from "./OverseerGate.ts";
+import * as Policy from "./OverseerWakePolicy.ts";
 
 export class WakeFactsError extends Schema.TaggedError<WakeFactsError>()("WakeFactsError", {
   operation: Schema.String,
@@ -321,12 +322,23 @@ const make = Effect.gen(function* () {
       if (!link) continue;
       if (event.type === "runtime-request.updated") {
         const request = event.payload;
-        const key = { linkId: link.link_id, kind: "question" as const, sourceId: request.id };
+        const kind: "question" | "approval" | undefined =
+          request.kind === "user_input"
+            ? "question"
+            : Policy.isApprovalKind(request.kind)
+              ? "approval"
+              : undefined;
+        for (const candidate of ["question", "approval"] as const)
+          if (candidate !== kind)
+            yield* store.withdraw({ linkId: link.link_id, kind: candidate, sourceId: request.id });
+        if (!kind) continue;
+        const key = { linkId: link.link_id, kind, sourceId: request.id };
         if (
-          request.kind !== "user_input" ||
           request.status !== "pending" ||
-          (request.responseCapability.type !== "live" &&
-            request.responseCapability.type !== "message")
+          (kind === "approval"
+            ? request.responseCapability.type !== "live"
+            : request.responseCapability.type !== "live" &&
+              request.responseCapability.type !== "message")
         ) {
           yield* store.withdraw(key);
           continue;
@@ -432,6 +444,26 @@ const make = Effect.gen(function* () {
     if (context?.commandType === "queue.resume" || context?.commandType === "queued-run.start")
       observers.add(context.threadId);
     for (const observer of observers) yield* store.touch(observer);
+    const idleObservers = new Set(
+      events
+        .filter(
+          (stored) =>
+            relevant(stored) ||
+            stored.event.type === "thread.snoozed" ||
+            (stored.event.type === "turn-item.updated" &&
+              stored.event.payload.type === "command_execution"),
+        )
+        .map(({ event }) => event.threadId),
+    );
+    if (
+      context &&
+      ["thread.stop", "queue.resume", "queued-run.start", "message.dispatch"].includes(
+        context.commandType,
+      )
+    )
+      idleObservers.add(context.threadId);
+    for (const observer of idleObservers)
+      yield* Policy.syncIdleState(observer).pipe(Effect.provideService(SqlClient.SqlClient, sql));
   });
   return OverseerWakeFacts.of({
     commit: gate.commit,
@@ -506,7 +538,7 @@ const make = Effect.gen(function* () {
                 for (;;) {
                   type Pending = {
                     readonly link_id: string;
-                    readonly kind: "completion" | "question";
+                    readonly kind: Policy.OccurrenceKind;
                     readonly source_id: string;
                     readonly source_sequence: number;
                   };
@@ -526,7 +558,7 @@ const make = Effect.gen(function* () {
                     else
                       yield* store.refreshQuestion({
                         linkId: row.link_id,
-                        kind: "question",
+                        kind: row.kind,
                         sourceId: row.source_id,
                       });
                   }

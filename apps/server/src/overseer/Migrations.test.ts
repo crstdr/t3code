@@ -4,6 +4,9 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Migrator from "effect/sql/Migrator";
 import CanonicalState from "./Migration.ts";
+import WakeFacts from "./WakeFactsMigration.ts";
+import Mailbox from "./MailboxMigration.ts";
+import Recovery from "./RecoveryMigration.ts";
 import {
   migrationManifest,
   runMigrations as runCoreMigrations,
@@ -19,6 +22,7 @@ const featureTables = [
   "overseer_mailboxes",
   "overseer_migrations",
   "overseer_occurrences",
+  "overseer_preferences",
   "overseer_transports",
   "overseer_work_runs",
 ];
@@ -50,6 +54,7 @@ it.effect("fresh application persistence applies the feature track after core mi
       { migration_id: 2, name: "WakeFacts" },
       { migration_id: 3, name: "Mailbox" },
       { migration_id: 4, name: "Recovery" },
+      { migration_id: 5, name: "WakeControls" },
     ]);
     assert.deepEqual(
       yield* sql`SELECT name FROM sqlite_schema WHERE name='overseer_attempts_run_attempt_idx'`,
@@ -73,6 +78,7 @@ it.effect("upstream-only migration guard accepts a database with namespaced feat
       [2, "WakeFacts"],
       [3, "Mailbox"],
       [4, "Recovery"],
+      [5, "WakeControls"],
     ]);
     yield* sql`INSERT INTO overseer_mailboxes(observer_thread_id, hold_mask) VALUES ('observer', 1)`;
     assert.deepEqual(yield* runCoreMigrations(), []);
@@ -96,6 +102,7 @@ it.effect("upgrades the slice-1 schema without changing existing mailbox revisio
       [2, "WakeFacts"],
       [3, "Mailbox"],
       [4, "Recovery"],
+      [5, "WakeControls"],
     ]);
     assert.deepEqual(
       yield* sql`SELECT revision FROM overseer_mailboxes WHERE observer_thread_id = 'observer'`,
@@ -103,6 +110,51 @@ it.effect("upgrades the slice-1 schema without changing existing mailbox revisio
     );
     assert.deepEqual(yield* tables, featureTables);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect(
+  "upgrades frozen slice-3c state without changing occurrence membership or receipt history",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runCoreMigrations();
+      yield* Migrator.make({})({
+        table: "overseer_migrations",
+        loader: Migrator.fromRecord({
+          "1_CanonicalState": CanonicalState,
+          "2_WakeFacts": WakeFacts,
+          "3_Mailbox": Mailbox,
+          "4_Recovery": Recovery,
+        }),
+      });
+      yield* sql`INSERT INTO overseer_mailboxes(observer_thread_id, revision) VALUES ('observer', 7)`;
+      yield* sql`INSERT INTO overseer_links(link_id, observer_thread_id, observer_project_id, target_thread_id, target_project_id,
+      client_request_id, fingerprint, launch_command_id, launch_message_id, launch_accepted) VALUES ('link', 'observer', 'project', 'worker', 'project', 'request', 'input', 'launch', 'message', 1)`;
+      yield* sql`INSERT INTO overseer_batches VALUES ('observer', 1, 0, 7, 'frozen')`;
+      for (const disposition of ["pending", "accepted", "withdrawn", "suppressed"])
+        yield* sql`INSERT INTO overseer_occurrences VALUES ('link', 'question', ${disposition}, 'observer', 1, 1, ${disposition}, 1)`;
+      yield* sql`INSERT INTO overseer_attempts(observer_thread_id, batch_number, attempt_number, command_id, message_id, state)
+      VALUES ('observer', 1, 1, 'delivery', 'notice', 'pending')`;
+      const before = yield* sql`SELECT * FROM overseer_occurrences ORDER BY source_id`;
+      const schema = yield* sql<{
+        readonly name: string;
+      }>`SELECT name FROM sqlite_schema WHERE tbl_name = 'overseer_occurrences'
+        AND type IN ('index', 'trigger') AND name NOT LIKE 'sqlite_%'`;
+      assert.deepEqual(yield* runMigrations(), [[5, "WakeControls"]]);
+      const migrated = yield* sql<{
+        readonly name: string;
+      }>`SELECT name FROM sqlite_schema WHERE tbl_name = 'overseer_occurrences'
+        AND type IN ('index', 'trigger') AND name NOT LIKE 'sqlite_%'`;
+      for (const object of schema) assert.isTrue(migrated.some((row) => row.name === object.name));
+      assert.deepEqual(yield* sql`SELECT * FROM overseer_occurrences ORDER BY source_id`, before);
+      assert.deepEqual(yield* sql`SELECT state, purpose, idle_token FROM overseer_batches`, [
+        { state: "frozen", purpose: "updates", idle_token: null },
+      ]);
+      assert.deepEqual(yield* sql`SELECT state FROM overseer_attempts`, [{ state: "pending" }]);
+      assert.deepEqual(yield* sql`PRAGMA foreign_key_check`, []);
+      assert.deepEqual(yield* coreHistory, migrationManifest);
+      assert.deepEqual(yield* runMigrations(), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
 it.effect("restores the bounded source index when a core projection recreation removed it", () =>
@@ -138,6 +190,7 @@ it.effect("re-running the feature migrator is idempotent and preserves data", ()
       { migration_id: 2, name: "WakeFacts" },
       { migration_id: 3, name: "Mailbox" },
       { migration_id: 4, name: "Recovery" },
+      { migration_id: 5, name: "WakeControls" },
     ]);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

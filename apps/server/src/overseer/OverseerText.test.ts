@@ -31,6 +31,7 @@ it("snapshots the verbatim W1 envelope and W2 summary without interpolated worke
     rendered: renderWake("observer:1", [
       { kind: "completion", threadId: "worker", runId: "run:1", outcome: "interrupted" },
       { kind: "question", threadId: "worker", requestId: "request:1" },
+      { kind: "approval", threadId: "worker", requestId: "permission:1" },
     ]),
   }).toMatchSnapshot();
 });
@@ -50,6 +51,10 @@ it.each([1, 8])("snapshots the native Claude wake representation for %s entries"
     bodyBytes: Buffer.byteLength(rendered.text),
     envelopeBytes: Buffer.byteLength(rendered.text) + Buffer.byteLength(wakeText.W2),
   }).toMatchSnapshot();
+});
+
+it("snapshots the W3-only idle input as received by Claude", () => {
+  expect(makeClaudeUserMessage({ text: wakeText.W3, uuid: sampleNativeUuid })).toMatchSnapshot();
 });
 
 it("splits by complete entries at eight and 2048 UTF-8 bytes, never truncating an identity", () => {

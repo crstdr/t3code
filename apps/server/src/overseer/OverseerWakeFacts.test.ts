@@ -431,7 +431,7 @@ it.effect("automatic wake, maintenance and their restart descendants never becom
 );
 
 it.effect(
-  "keeps live and message questions independently, excluding approvals and withdrawing dead requests",
+  "keeps live and message questions distinct from approvals and withdraws dead requests",
   () =>
     Effect.gen(function* () {
       const { start, question, write, store } = yield* setup();

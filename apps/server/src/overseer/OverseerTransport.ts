@@ -8,6 +8,7 @@ import {
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Policy from "./OverseerWakePolicy.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -21,7 +22,7 @@ import { OverseerNoticeGrant } from "./OverseerNoticeGrant.ts";
 
 const Member = Schema.Struct({
   linkId: Schema.String,
-  kind: Schema.Literals(["completion", "question"]),
+  kind: Schema.Literals(["completion", "question", "approval"]),
   sourceId: Schema.String,
 });
 const Members = Schema.fromJsonString(Schema.Array(Member));
@@ -120,6 +121,10 @@ const make = Effect.gen(function* () {
     yield* sql`UPDATE overseer_transports SET phase = 'retired' WHERE message_id = ${message} AND phase IN ('prepared', 'queued', 'frozen')`;
     if (row?.phase === "frozen")
       yield* store.releaseUnsentBatch(ThreadId.make(row.observer_thread_id), row.batch_number);
+    if (row && ["prepared", "queued", "frozen"].includes(row.phase))
+      yield* Policy.releaseIdleBatch(row.observer_thread_id, row.batch_number).pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+      );
   });
   const reconcileUnsent = Effect.fn("OverseerTransport.reconcileUnsent")(function* (
     message: string,
@@ -238,8 +243,34 @@ const make = Effect.gen(function* () {
             const origin = yield* forMessage(box.retry_message_id);
             if (!origin)
               return yield* new OverseerStore.OverseerConflict({ reason: "attempt_identity" });
+            const originBatch = (yield* sql<{
+              readonly purpose: string;
+              readonly idle_token: string | null;
+            }>`SELECT purpose, idle_token FROM overseer_batches
+          WHERE observer_thread_id = ${observer} AND batch_number = ${origin.batch_number}`)[0];
+            if (originBatch?.purpose === "idle") {
+              if (
+                !(yield* Policy.idleBatchEligible(observer, origin.batch_number, true).pipe(
+                  Effect.provideService(SqlClient.SqlClient, sql),
+                ))
+              ) {
+                yield* clearRetry(origin);
+                yield* store.releaseUnsentBatch(observer, origin.batch_number);
+                yield* Policy.syncIdleState(observer).pipe(
+                  Effect.provideService(SqlClient.SqlClient, sql),
+                );
+                return true;
+              }
+              yield* sql`UPDATE overseer_batches SET state = 'frozen', epoch = ${box.epoch}, revision = ${box.revision}
+            WHERE observer_thread_id = ${observer} AND batch_number = ${origin.batch_number} AND state IN ('queued', 'frozen', 'disposed')`;
+              return true;
+            }
+            const policy = yield* Policy.admission(observer).pipe(
+              Effect.provideService(SqlClient.SqlClient, sql),
+            );
             const survivors: Array<typeof Member.Type> = [];
             for (const member of yield* decodeMembers(origin.members_json)) {
+              if (member.kind === "completion" && !policy.allowRoutine) continue;
               const row = (yield* sql<{
                 readonly ready: number;
                 readonly state: string;
@@ -379,6 +410,9 @@ const make = Effect.gen(function* () {
                 AND batch_number = ${row.batch_number} AND state IN ('queued', 'frozen')`;
               yield* clearRetry(row);
               yield* sql`UPDATE overseer_transports SET phase = 'retired' WHERE message_id = ${message}`;
+              yield* Policy.releaseIdleBatch(row.observer_thread_id, row.batch_number, true).pipe(
+                Effect.provideService(SqlClient.SqlClient, sql),
+              );
               yield* store.touch(ThreadId.make(row.observer_thread_id));
               continue;
             }
@@ -528,15 +562,33 @@ const make = Effect.gen(function* () {
             const members = yield* decodeMembers(row.members_json);
             // The receipt describes an earlier admitted snapshot, not today's batch. A
             // resolved question stays withdrawn while surviving delivered members settle.
-            for (const member of members)
-              yield* sql`UPDATE overseer_occurrences SET disposition = 'accepted'
-          WHERE link_id = ${member.linkId} AND kind = ${member.kind} AND source_id = ${member.sourceId} AND disposition = 'pending' AND ready = 1`;
+            let routine = false;
+            for (const member of members) {
+              const accepted = yield* sql`UPDATE overseer_occurrences SET disposition = 'accepted'
+          WHERE link_id = ${member.linkId} AND kind = ${member.kind} AND source_id = ${member.sourceId} AND disposition = 'pending' AND ready = 1 RETURNING 1`;
+              if (member.kind === "completion" && accepted.length > 0) routine = true;
+            }
+            if (routine)
+              yield* sql`INSERT INTO overseer_preferences(observer_thread_id, last_routine_accepted_at)
+              VALUES (${row.observer_thread_id}, ${DateTime.formatIso(yield* DateTime.now)})
+              ON CONFLICT(observer_thread_id) DO UPDATE SET last_routine_accepted_at = excluded.last_routine_accepted_at`;
+            const batch = (yield* sql<{
+              readonly purpose: string;
+              readonly idle_token: string | null;
+            }>`SELECT purpose, idle_token FROM overseer_batches
+              WHERE observer_thread_id = ${row.observer_thread_id} AND batch_number = ${row.batch_number}`)[0];
+            if (batch?.purpose === "idle")
+              yield* sql`UPDATE overseer_preferences SET idle_pending_token = NULL, idle_due_at = NULL
+              WHERE observer_thread_id = ${row.observer_thread_id} AND idle_pending_token = ${batch.idle_token}`;
             yield* sql`UPDATE overseer_attempts SET state = 'accepted' WHERE message_id = ${input.messageId} AND state = 'pending'`;
             yield* sql`UPDATE overseer_batches SET state = 'accepted' WHERE observer_thread_id = ${row.observer_thread_id}
           AND batch_number = ${row.batch_number} AND state = 'frozen'`;
             yield* sql`UPDATE overseer_transports SET phase = 'received', receipt_kind = ${input.kind} WHERE message_id = ${input.messageId}`;
             yield* clearRetry(row);
             yield* store.touch(ThreadId.make(row.observer_thread_id));
+            yield* Policy.syncIdleState(row.observer_thread_id).pipe(
+              Effect.provideService(SqlClient.SqlClient, sql),
+            );
             return true;
           }),
         ),
