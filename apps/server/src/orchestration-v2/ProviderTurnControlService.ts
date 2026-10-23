@@ -19,6 +19,8 @@ import * as Schema from "effect/Schema";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import * as OverseerNative from "../overseer/OverseerNative.ts";
+import * as OverseerTransport from "../overseer/OverseerTransport.ts";
 
 const yieldToRuntime = Effect.yieldNow.pipe(
   Effect.andThen(
@@ -90,6 +92,7 @@ export const layer: Layer.Layer<
   Effect.gen(function* () {
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+    const overseerTransport = yield* Effect.serviceOption(OverseerTransport.OverseerTransport);
 
     const load = Effect.fn("ProviderTurnControlService.load")(function* (input: {
       readonly threadId: ThreadId;
@@ -343,7 +346,10 @@ export const layer: Layer.Layer<
               return;
           }
           const loaded = yield* load({ ...input, operation: "steer" });
-          if (Option.isNone(loaded.session)) return;
+          const abandonUnsent = Option.isSome(overseerTransport)
+            ? overseerTransport.value.abandonUnsent(input.messageId).pipe(Effect.orDie)
+            : Effect.void;
+          if (Option.isNone(loaded.session)) return yield* abandonUnsent;
           const { message, run } = loaded.context;
           if (message === undefined || run === undefined) {
             return yield* new ProviderTurnControlError({
@@ -377,8 +383,20 @@ export const layer: Layer.Layer<
               },
             })
             .pipe(
+              Effect.provideService(
+                OverseerNative.Observer,
+                Option.isSome(overseerTransport) && run.activeAttemptId !== null
+                  ? OverseerNative.observation(overseerTransport.value, {
+                      messageId: message.id,
+                      runId: run.id,
+                      attemptId: run.activeAttemptId,
+                      providerSessionId: input.providerSessionId,
+                    })
+                  : undefined,
+              ),
               Effect.catch((cause) =>
                 Effect.gen(function* () {
+                  if (OverseerNative.isFenced(cause)) return yield* abandonUnsent;
                   const current = yield* projections.getProviderControlContext(
                     input.threadId,
                     input,
@@ -405,6 +423,11 @@ export const layer: Layer.Layer<
                     providerTurnId: input.providerTurnId,
                     cause,
                   }),
+            ),
+            Effect.tapError(() =>
+              Option.isSome(overseerTransport)
+                ? overseerTransport.value.abandonUnsent(input.messageId).pipe(Effect.orDie)
+                : Effect.void,
             ),
           ),
       ),

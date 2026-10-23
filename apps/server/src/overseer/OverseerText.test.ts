@@ -19,8 +19,61 @@ import pinnedAttachmentFailures from "./fixtures/upstream-96f09c6558-attachment-
 import { Tool } from "effect/ai";
 import { ProjectToolkit, ProjectToolkitOverseer } from "../mcp/toolkits/project/tools.ts";
 import * as Feature from "./OverseerFeature.ts";
-import { launchText } from "./OverseerText.ts";
+import { launchText, wakeText, renderWake, type WakeEntry } from "./OverseerText.ts";
+import { makeClaudeUserMessage } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
+import { wakeExample, sampleNativeUuid } from "./OverseerText.testkit.ts";
+import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
 import { OverseerLaunchError, toMcpFailure } from "./OverseerLaunchService.ts";
+
+it("snapshots the verbatim W1 envelope and W2 summary without interpolated worker prose", () => {
+  expect({
+    strings: wakeText,
+    rendered: renderWake("observer:1", [
+      { kind: "completion", threadId: "worker", runId: "run:1", outcome: "interrupted" },
+      { kind: "question", threadId: "worker", requestId: "request:1" },
+      { kind: "approval", threadId: "worker", requestId: "permission:1" },
+    ]),
+  }).toMatchSnapshot();
+});
+
+it.each([1, 8])("snapshots the native Claude wake representation for %s entries", (count) => {
+  const rendered = wakeExample(count);
+  assert.equal(rendered.count, count);
+  const native = makeClaudeUserMessage({ text: rendered.text, uuid: sampleNativeUuid });
+  assert.equal(native.message.content, rendered.text);
+  expect({
+    summary: wakeText.W2,
+    native,
+    ultrathink: makeClaudeUserMessage({
+      text: applyClaudePromptEffortPrefix(rendered.text, "ultrathink"),
+      uuid: sampleNativeUuid,
+    }),
+    bodyBytes: Buffer.byteLength(rendered.text),
+    envelopeBytes: Buffer.byteLength(rendered.text) + Buffer.byteLength(wakeText.W2),
+  }).toMatchSnapshot();
+});
+
+it("snapshots the W3-only idle input as received by Claude", () => {
+  expect(makeClaudeUserMessage({ text: wakeText.W3, uuid: sampleNativeUuid })).toMatchSnapshot();
+});
+
+it("splits by complete entries at eight and 2048 UTF-8 bytes, never truncating an identity", () => {
+  const entries: WakeEntry[] = Array.from({ length: 9 }, (_, index) => ({
+    kind: "question",
+    threadId: `worker:${index}`,
+    requestId: `request:${index}`,
+  }));
+  assert.equal(renderWake("batch", entries)?.count, 8);
+  const wide: WakeEntry[] = entries.map((entry) => ({ ...entry, threadId: "λ".repeat(160) }));
+  const rendered = renderWake("batch", wide)!;
+  assert.isAbove(rendered.count, 0);
+  assert.isBelow(rendered.count, 8);
+  assert.isAtMost(Buffer.byteLength(rendered.text) + Buffer.byteLength(wakeText.W2), 2048);
+  assert.equal(rendered.text.split("user-input question pending.").length - 1, rendered.count);
+  assert.isUndefined(
+    renderWake("batch", [{ kind: "question", threadId: "x".repeat(2048), requestId: "request" }]),
+  );
+});
 
 // Register against Effect's in-memory MCP registry, without a transport or listener.
 const renderCatalog = Effect.fn("test.overseer.catalog")(function* (overseen = false) {

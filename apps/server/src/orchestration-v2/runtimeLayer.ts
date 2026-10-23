@@ -50,6 +50,13 @@ import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as OverseerLaunch from "../overseer/OverseerLaunchService.ts";
 import * as OverseerStore from "../overseer/OverseerStore.ts";
+import * as OverseerWakeFacts from "../overseer/OverseerWakeFacts.ts";
+import * as OverseerMailbox from "../overseer/OverseerMailbox.ts";
+import * as OverseerTransport from "../overseer/OverseerTransport.ts";
+import * as OverseerContinuation from "../overseer/OverseerContinuation.ts";
+import * as OverseerRecovery from "../overseer/OverseerRecovery.ts";
+import * as OverseerPreferences from "../overseer/OverseerPreferences.ts";
+import * as OverseerIdleScheduler from "../overseer/OverseerIdleScheduler.ts";
 import * as ThreadLaunchService from "./ThreadLaunchService.ts";
 import * as ThreadLifecycleService from "./ThreadLifecycleService.ts";
 import * as ThreadForkService from "./ThreadForkService.ts";
@@ -166,6 +173,7 @@ const layerRunExecutionServiceProvided = RunExecutionService.layer.pipe(
 const layerProviderTurnStartServiceProvided = ProviderTurnStartService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      OverseerTransport.layer,
       layerContextHandoffServiceProvided,
       layerEventSinkProvided,
       IdAllocator.layer,
@@ -179,7 +187,13 @@ const layerProviderTurnStartServiceProvided = ProviderTurnStartService.layer.pip
 );
 
 const layerProviderTurnControlServiceProvided = ProviderTurnControlService.layer.pipe(
-  Layer.provide(Layer.merge(ProjectionStore.layer, layerProviderSessionManagerProvided)),
+  Layer.provide(
+    Layer.mergeAll(
+      ProjectionStore.layer,
+      layerProviderSessionManagerProvided,
+      OverseerTransport.layer,
+    ),
+  ),
 );
 const layerRuntimeRequestServiceProvided = RuntimeRequestService.layer.pipe(
   Layer.provide(Layer.merge(ProjectionStore.layer, layerProviderSessionManagerProvided)),
@@ -215,6 +229,8 @@ const layerRunFinalizationServiceProvided = RunFinalizationService.layer.pipe(
 const layerOrchestratorProvided = Orchestrator.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      OverseerMailbox.layer,
+      OverseerContinuation.layer,
       layerCheckpointServiceProvided,
       CommandPolicy.layer,
       layerStores,
@@ -323,6 +339,8 @@ const layerThreadTitleRegenerationProvided = ThreadTitleRegenerationService.laye
 const layerEffectExecutorProvided = EffectWorker.layerExecutor.pipe(
   Layer.provide(
     Layer.mergeAll(
+      layerOrchestratorProvided,
+      OverseerContinuation.layer,
       layerRunFinalizationServiceProvided,
       layerCheckpointRollbackServiceProvided,
       layerProviderSessionManagerProvided,
@@ -335,7 +353,7 @@ const layerEffectExecutorProvided = EffectWorker.layerExecutor.pipe(
   ),
 );
 const layerEffectWorkerProvided = EffectWorker.layer.pipe(
-  Layer.provide(Layer.merge(layerStores, layerEffectExecutorProvided)),
+  Layer.provide(Layer.mergeAll(layerStores, layerEffectExecutorProvided, OverseerWakeFacts.layer)),
 );
 const layerProviderRuntimeRecoveryProvided = ProviderRuntimeRecoveryService.layer.pipe(
   Layer.provide(
@@ -343,6 +361,7 @@ const layerProviderRuntimeRecoveryProvided = ProviderRuntimeRecoveryService.laye
       layerEffectWorkerProvided,
       layerStores,
       layerEventSinkProvided,
+      OverseerContinuation.layer,
       IdAllocator.layer,
       ProjectionStore.layer,
     ),
@@ -379,6 +398,11 @@ export const layerProduction = Layer.mergeAll(
   layerManagedProjectFoldersProvided,
   layerThreadLaunchProvided,
   layerOverseerLaunchProvided,
+  OverseerPreferences.layer,
+  OverseerIdleScheduler.layerWorker,
+  OverseerRecovery.layer.pipe(
+    Layer.provide(Layer.mergeAll(layerOrchestratorProvided, layerProviderAdapterRegistryProvided)),
+  ),
   layerThreadLifecycleProvided,
   layerScheduledTaskProvided,
   layerSecretRequestsProvided,

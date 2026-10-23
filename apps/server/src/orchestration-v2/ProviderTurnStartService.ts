@@ -53,6 +53,8 @@ import {
 } from "@t3tools/provider-core/server/failure";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
+import * as OverseerNative from "../overseer/OverseerNative.ts";
+import * as OverseerTransport from "../overseer/OverseerTransport.ts";
 import {
   isRestartNoteContinuation,
   pendingRestartCancelledBackgroundWork,
@@ -117,6 +119,7 @@ export const layer: Layer.Layer<
   ProviderTurnStartServiceV2,
   Effect.gen(function* () {
     const eventSink = yield* EventSink.EventSinkV2;
+    const overseerTransport = yield* Effect.serviceOption(OverseerTransport.OverseerTransport);
     const contextHandoffService = yield* ContextHandoffService.ContextHandoffServiceV2;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
     const fileSystem = yield* FileSystem.FileSystem;
@@ -666,7 +669,24 @@ export const layer: Layer.Layer<
         });
         return;
       }
-      const session = sessionResult.success;
+      const rawSession = sessionResult.success;
+      const session = {
+        ...rawSession,
+        startTurn: (input: Parameters<typeof rawSession.startTurn>[0]) =>
+          rawSession.startTurn(input).pipe(
+            Effect.provideService(
+              OverseerNative.Observer,
+              Option.isSome(overseerTransport)
+                ? OverseerNative.observation(overseerTransport.value, {
+                    messageId: input.message.messageId,
+                    runId: input.runId,
+                    attemptId: input.attemptId,
+                    providerSessionId,
+                  })
+                : undefined,
+            ),
+          ),
+      };
       if (!(yield* isCurrentAttemptInStatus("starting"))) return;
       const loadFromProvider = Effect.fn("ProviderTurnStartService.loadFromProvider")(function* (
         load: Effect.Effect<OrchestrationV2ProviderThread, ProviderAdapter.ProviderAdapterV2Error>,

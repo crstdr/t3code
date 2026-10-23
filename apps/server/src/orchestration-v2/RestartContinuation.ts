@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import type { ProjectionRuntimeRecoveryState } from "./ProjectionStore.ts";
 
 import * as ServerSettings from "../serverSettings.ts";
+import * as OverseerContinuation from "../overseer/OverseerContinuation.ts";
 import { isNativeMaintenanceCommand } from "./CommandPolicy.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import {
@@ -188,6 +189,8 @@ export function restartContinuationRun(
 
 export const continueRestartedRun = Effect.fn("RestartContinuation.continueRestartedRun")(
   function* (input: { readonly threadId: ThreadId; readonly sourceRunId: RunId }) {
+    if ((yield* OverseerContinuation.disposition({ runId: input.sourceRunId })) === "mailbox_owned")
+      return "mailbox_owned" as const;
     const settings = yield* ServerSettings.ServerSettingsService;
     const enabled = yield* settings.getSettings.pipe(Effect.orElseSucceed(() => null));
     if (!enabled) return;
@@ -323,11 +326,13 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
   // result. Once a continuation run exists this is a no-op; that run settles it.
   (effect, input) =>
     effect.pipe(
-      Effect.andThen(
-        Effect.gen(function* () {
-          const threads = yield* ThreadManagementService.ThreadManagementService;
-          yield* threads.recoverDelegatedTask(input.threadId, input.sourceRunId);
-        }),
+      Effect.flatMap((disposition) =>
+        disposition === "mailbox_owned"
+          ? Effect.void
+          : Effect.gen(function* () {
+              const threads = yield* ThreadManagementService.ThreadManagementService;
+              yield* threads.recoverDelegatedTask(input.threadId, input.sourceRunId);
+            }),
       ),
     ),
 );

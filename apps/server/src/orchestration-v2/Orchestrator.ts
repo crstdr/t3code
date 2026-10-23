@@ -108,6 +108,11 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import { resolveProjectProviderInstanceEnabled } from "@t3tools/contracts";
+import * as OverseerMailbox from "../overseer/OverseerMailbox.ts";
+import * as OverseerContinuation from "../overseer/OverseerContinuation.ts";
+import * as OverseerFeature from "../overseer/OverseerFeature.ts";
+import { OverseerNoticeGrant } from "../overseer/OverseerNoticeGrant.ts";
 import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimit.ts";
 import {
   applyToProjection,
@@ -297,6 +302,10 @@ export interface OrchestratorV2DispatchResult {
 }
 
 export interface OrchestratorV2Shape {
+  readonly syncOverseer?: (input: {
+    readonly observerThreadId: ThreadId;
+    readonly generation: string;
+  }) => Effect.Effect<void, OrchestratorV2Error>;
   readonly resumeQueuedRuns: Effect.Effect<number, OrchestratorV2Error>;
   readonly recoverDelegatedTasks: Effect.Effect<void>;
   readonly recoverDelegatedTask: (threadId: ThreadId, sourceRunId: RunId) => Effect.Effect<void>;
@@ -932,6 +941,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const runtimePolicy = yield* RuntimePolicyV2;
   const threadForkService = yield* ThreadForkServiceV2;
   const threadDispatch = yield* ThreadCommandExecutor.ThreadCommandExecutor;
+  const overseerMailbox = yield* Effect.serviceOption(OverseerMailbox.OverseerMailbox);
+  const continuationOwnership = yield* OverseerContinuation.capture;
 
   const mapDispatchError =
     (command: OrchestrationV2ServerCommand) =>
@@ -4109,6 +4120,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly scheduledTaskId?: OrchestrationV2ConversationMessage["scheduledTaskId"];
     readonly senderThreadId?: OrchestrationV2ConversationMessage["senderThreadId"];
     readonly delegatedCompletion?: OrchestrationV2ConversationMessage["delegatedCompletion"];
+    readonly notification?: OrchestrationV2ConversationMessage["notification"];
     readonly forceRestart: boolean;
   }) {
     const targetRun = input.projection.runs.find((candidate) => candidate.id === input.targetRunId);
@@ -4261,6 +4273,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(input.delegatedCompletion === undefined
             ? {}
             : { delegatedCompletion: input.delegatedCompletion }),
+          ...(input.notification === undefined ? {} : { notification: input.notification }),
           ...(input.scheduledTaskId === undefined
             ? {}
             : { scheduledTaskId: input.scheduledTaskId }),
@@ -5108,11 +5121,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
     // Route durable mailbox deliveries under the thread lock, using the live
     // session's capabilities. Never interrupt/restart a turn for a notification.
+    const overseerGrant = yield* OverseerNoticeGrant;
+    const overseerSteer = overseerGrant?.messageId === command.messageId && !overseerGrant.queued;
     if (
-      delegatedCompletion !== undefined &&
-      delegatedCompletion.taskIds.every(
-        (id) => projection.subagents.find((task) => task.id === id)?.completionWake === "always",
-      )
+      overseerSteer ||
+      (delegatedCompletion !== undefined &&
+        delegatedCompletion.taskIds.every(
+          (id) => projection.subagents.find((task) => task.id === id)?.completionWake === "always",
+        ))
     ) {
       const active = projection.runs.find((run) => run.status === "running");
       const providerThread = projection.providerThreads.find(
@@ -5135,6 +5151,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           .pipe(Effect.orElseSucceed(() => Option.none()));
         if (
           Option.isSome(session) &&
+          (!overseerSteer || session.value.driver === "codex") &&
           session.value.providerSession.capabilities.turns.supportsActiveSteering &&
           session.value.providerSession.capabilities.turns.activeSteeringInterruptsTools !== true
         ) {
@@ -5203,11 +5220,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         effects,
         projection,
         modelSelection:
-          delegatedCompletion === undefined
+          delegatedCompletion === undefined && !overseerSteer
             ? modelSelection
             : (projection.runs.find((run) => run.id === dispatchMode.targetRunId)?.modelSelection ??
               modelSelection),
         delegatedCompletion,
+        notification: command.notification,
         targetRunId: dispatchMode.targetRunId,
         messageId: command.messageId,
         text: dispatchText,
@@ -8266,9 +8284,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `Queued run ${queuedRun.id} has no user message.`,
       });
     }
+    const overseerGrant = yield* OverseerNoticeGrant;
     if (
       queuedMessage.delegatedCompletion !== undefined ||
-      queuedMessage.notification !== undefined
+      (queuedMessage.notification !== undefined && overseerGrant?.messageId !== queuedMessage.id)
     ) {
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
@@ -10903,6 +10922,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     )
       return;
     const progress = delegatedTaskProgress(childControls);
+    if (
+      progress.resultRun &&
+      (yield* continuationOwnership
+        .disposition({ runId: progress.resultRun.id, messageId: progress.resultRun.userMessageId })
+        .pipe(Effect.orDie)) === "mailbox_owned"
+    )
+      return;
     const parent = yield* projectionStore.getThreadRecords(parentThreadId, [
       "subagents",
       "contextTransfers",
@@ -11702,33 +11728,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
     );
 
-    if (plan.events.length === 0) {
-      // A settle that ended nothing still records its receipt: a replayed Stop
-      // effect then finds it instead of settling work that appeared since.
-      const resultSequence = yield* Effect.gen(function* () {
-        const sequence = yield* eventSink.latestSequence({ threadId: commandThreadId(command) });
-        yield* commandReceipts.insertIfAbsent({
-          commandId: command.commandId,
-          threadId: commandThreadId(command),
-          commandType: command.type,
-          acceptedAt: yield* DateTime.now,
-          resultSequence: sequence,
-          status: "accepted",
-          error: null,
-        });
-        return sequence;
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new OrchestratorDispatchError({
-              commandId: command.commandId,
-              commandType: command.type,
-              cause,
-            }),
-        ),
-      );
-      return { sequence: resultSequence, storedEvents: [] } satisfies OrchestratorV2DispatchResult;
-    }
     const acceptedAt = plan.events.at(-1)?.occurredAt ?? (yield* DateTime.now);
     const committed = yield* eventSink
       .commitCommand({
@@ -11737,8 +11736,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandType: command.type,
         acceptedAt,
         events: plan.events,
-        effects: plan.effects,
-        ...(plan.cancelUnsettledEffects === undefined
+        // Eventless plans historically wrote only their receipt, never core effects.
+        effects: plan.events.length === 0 ? [] : plan.effects,
+        ...(plan.events.length === 0 || plan.cancelUnsettledEffects === undefined
           ? {}
           : { cancelUnsettledEffects: plan.cancelUnsettledEffects }),
       })
@@ -12069,6 +12069,30 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     new OrchestratorProjectionError({ threadId: ThreadId.make("thread:shell"), cause });
 
   return OrchestratorV2.of({
+    syncOverseer: (input) =>
+      threadDispatch.withLock(
+        input.observerThreadId,
+        Effect.gen(function* () {
+          if (!(yield* OverseerFeature.Enabled) || Option.isNone(overseerMailbox)) return;
+          const shell = yield* projectionStore.getThreadShell(input.observerThreadId);
+          if (!shell || shell.deletedAt !== null) return;
+          if (
+            !resolveProjectProviderInstanceEnabled(
+              yield* serverSettings.getSettings,
+              shell.projectId,
+              shell.providerInstanceId,
+            )
+          )
+            return;
+          const adapter = yield* providerAdapters.get(shell.providerInstanceId);
+          if (adapter.driver !== "codex" && adapter.driver !== "claudeAgent") return;
+          yield* overseerMailbox.value.sync(input, dispatchWithReceiptEffect);
+        }).pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: input.observerThreadId, cause }),
+          ),
+        ),
+      ),
     resumeQueuedRuns,
     recoverDelegatedTasks,
     recoverDelegatedTask,
