@@ -1,6 +1,8 @@
 import { assert, it } from "@effect/vitest";
 import {
   EventId,
+  MessageId,
+  RunId,
   NodeId,
   RuntimeRequestId,
   OversightWatchFrame,
@@ -66,6 +68,35 @@ it.effect("real source commits update both endpoint watches and terminal statuse
       assert.isAbove(frame.revision, initialOut.revision);
       yield* encodeFrame(frame);
     }
+    const heldId = RunId.make("held-followup");
+    const heldMessageId = MessageId.make("held-message");
+    yield* sink.write({
+      events: [
+        {
+          id: EventId.make("held-message-event"),
+          type: "message.updated",
+          threadId: target,
+          occurredAt: now,
+          payload: { ...launched.projection.messages[0]!, id: heldMessageId, runId: heldId },
+        },
+        {
+          id: EventId.make("held-run"),
+          type: "run.created",
+          threadId: target,
+          occurredAt: now,
+          payload: {
+            ...run,
+            id: heldId,
+            userMessageId: heldMessageId,
+            ordinal: run.ordinal + 1,
+            status: "queued",
+            queueHeld: true,
+            activeAttemptId: null,
+          },
+        },
+      ],
+    });
+    assert.equal((yield* outgoing)[0]!.links[0]!.workerStatus, "rolled_back");
     yield* sink.write({
       events: [
         {

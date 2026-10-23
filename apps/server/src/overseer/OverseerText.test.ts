@@ -124,12 +124,17 @@ it.effect("snapshots the draft link catalog with exactly list and unlink", () =>
 // (blob 2114565d8201ea11c085f43a7c1c3e17b0c7d7ea), not Tool.getJsonSchema.
 it.effect("the disabled project's actual MCP catalog is byte-identical to pinned upstream", () =>
   Effect.gen(function* () {
-    assert.equal(JSON.stringify(yield* renderCatalog()), JSON.stringify(pinnedCatalog));
+    const ordinary = yield* renderCatalog();
+    assert.equal(JSON.stringify(ordinary), JSON.stringify(pinnedCatalog));
     const enabled = yield* renderCatalog().pipe(Effect.provideService(Feature.Enabled, true));
     assert.deepEqual(
       enabled.map((tool) => tool.name).sort(),
       [...Object.keys(ProjectToolkitOverseer.tools), "t3_thread_link"].sort(),
     );
+    expect({
+      ordinaryCatalogBytes: Buffer.byteLength(JSON.stringify(ordinary)),
+      enabledCatalogBytes: Buffer.byteLength(JSON.stringify(enabled)),
+    }).toMatchSnapshot();
   }),
 );
 

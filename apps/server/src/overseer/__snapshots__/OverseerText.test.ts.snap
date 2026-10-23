@@ -1039,3 +1039,10 @@ Read permitted output with t3_thread_read; approvals appear in view='activity'. 
   },
 }
 `;
+
+exports[`the disabled project's actual MCP catalog is byte-identical to pinned upstream 1`] = `
+{
+  "enabledCatalogBytes": 32850,
+  "ordinaryCatalogBytes": 30287,
+}
+`;

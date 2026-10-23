@@ -114,6 +114,7 @@ const make = Effect.gen(function* () {
       for (const row of rows.slice(0, 20)) {
         const counterpart =
           row.observer_thread_id === input.threadId ? row.target_thread_id : row.observer_thread_id;
+        // Match the shell's latestUnheldRun selection without loading run histories.
         const details = (yield* sql<{
           readonly title: string | null;
           readonly worker_status: OversightLink["workerStatus"];
@@ -125,7 +126,9 @@ const make = Effect.gen(function* () {
           readonly accepted: number;
         }>`SELECT substr(COALESCE(json_extract(c.payload_json, '$.title'), CASE WHEN ${counterpart} = l.target_thread_id THEN json_extract(l.launch_input_json, '$.title') END), 1, 121) AS title,
         CASE WHEN w.thread_id IS NULL THEN 'reserved' WHEN w.deleted_at IS NOT NULL THEN 'deleted' WHEN w.archived_at IS NOT NULL THEN 'archived'
-          ELSE COALESCE((SELECT r.status FROM orchestration_v2_projection_runs r WHERE r.thread_id = l.target_thread_id ORDER BY r.ordinal DESC LIMIT 1), 'idle') END AS worker_status,
+          ELSE COALESCE((SELECT r.status FROM orchestration_v2_projection_runs r WHERE r.thread_id = l.target_thread_id
+            AND NOT (r.status = 'queued' AND json_extract(r.payload_json, '$.queueHeld') IS 1)
+            ORDER BY r.ordinal DESC, r.run_id DESC LIMIT 1), 'idle') END AS worker_status,
         (SELECT COUNT(*) FROM orchestration_v2_projection_runtime_requests q WHERE q.thread_id = l.target_thread_id AND q.status = 'pending' AND q.kind = 'user_input') AS requests,
         COALESCE(m.hold_mask, 0) AS held,
         (w.archived_at IS NOT NULL OR h.archived_at IS NOT NULL OR json_extract(h.payload_json, '$.snoozedUntil') IS NOT NULL
