@@ -97,6 +97,11 @@ export class ManagedProjectFolders extends Context.Service<
       readonly threadId: ThreadId;
       readonly text: string;
     }) => Effect.Effect<Option.Option<string>, ScratchFolderError>;
+    readonly reservedThreadFolder: (input: {
+      readonly projectId: ProjectId;
+      readonly threadId: ThreadId;
+      readonly text: string;
+    }) => Effect.Effect<Option.Option<string>>;
     readonly namedProjectsRoot: string;
     /**
      * The folder is removed when the create fails or is cancelled before the
@@ -354,6 +359,25 @@ const make = Effect.gen(function* () {
     );
   });
 
+  const reservedThreadFolder = Effect.fn("ManagedProjectFolders.reservedThreadFolder")(
+    function* (input: {
+      readonly projectId: ProjectId;
+      readonly threadId: ThreadId;
+      readonly text: string;
+    }) {
+      const root = yield* scratchRoot;
+      if (Option.isNone(root) || !(yield* isScratchRoot(input.projectId, root.value)))
+        return Option.none();
+      const date = DateTime.formatIso(yield* DateTime.now).slice(0, 10);
+      const id = input.threadId.toLowerCase().replace(/[^a-z0-9]/g, "");
+      // The caller persists this binding before mkdir or thread.create. Full reserved IDs
+      // avoid free-folder allocation changing the binding across pre-create retries.
+      return Option.some(
+        path.join(root.value, [date, folderWords(input.text), id].filter(Boolean).join("-")),
+      );
+    },
+  );
+
   const namedProjectsRoot = path.resolve(config.baseDir, "projects");
 
   const claimNamedFolder = Effect.fn("ManagedProjectFolders.claimNamedFolder")(function* (
@@ -480,6 +504,7 @@ const make = Effect.gen(function* () {
     ensureScratchProject,
     isScratchProject,
     folderForThread,
+    reservedThreadFolder,
     namedProjectsRoot,
     createNamedProject,
   });

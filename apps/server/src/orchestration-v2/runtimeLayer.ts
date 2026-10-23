@@ -48,6 +48,8 @@ import * as ResourceCleanupService from "./ResourceCleanupService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
+import * as OverseerLaunch from "../overseer/OverseerLaunchService.ts";
+import * as OverseerStore from "../overseer/OverseerStore.ts";
 import * as ThreadLaunchService from "./ThreadLaunchService.ts";
 import * as ThreadLifecycleService from "./ThreadLifecycleService.ts";
 import * as ThreadForkService from "./ThreadForkService.ts";
@@ -276,6 +278,18 @@ const layerThreadLaunchProvided = ThreadLaunchService.layer.pipe(
     ),
   ),
 );
+const layerOverseerLaunchProvided = OverseerLaunch.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      OverseerStore.layer,
+      layerThreadLaunchProvided,
+      layerThreadManagementProvided,
+      layerProjectService,
+      layerManagedProjectFoldersProvided,
+      layerCommandReceiptStoreProvided,
+    ),
+  ),
+);
 const layerThreadLifecycleProvided = ThreadLifecycleService.layer.pipe(
   Layer.provide(layerThreadManagementProvided),
 );
@@ -364,6 +378,7 @@ export const layerProduction = Layer.mergeAll(
   layerProjectService,
   layerManagedProjectFoldersProvided,
   layerThreadLaunchProvided,
+  layerOverseerLaunchProvided,
   layerThreadLifecycleProvided,
   layerScheduledTaskProvided,
   layerSecretRequestsProvided,

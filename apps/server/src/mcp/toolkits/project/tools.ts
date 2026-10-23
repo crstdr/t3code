@@ -1,3 +1,4 @@
+import { extendThreadLaunch } from "../../../overseer/OverseerMcp.ts";
 import { McpAttachmentInput } from "../attachment/input.ts";
 import {
   NonNegativeInt,
@@ -150,6 +151,16 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
 })
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
+
+export const ProjectToolkitOverseer = Toolkit.make(
+  extendThreadLaunch(ThreadLaunchTool),
+  ProjectListTool,
+  ProjectReadTool,
+  ProjectCreateTool,
+  ProjectUpdateTool,
+  ProjectDeleteTool,
+  ProjectCloneTool,
+);
 
 export const ProjectToolkit = Toolkit.make(
   ThreadLaunchTool,

@@ -61,7 +61,7 @@ type Reservation = {
   readonly launchMessageId: MessageId;
   readonly launchInputJson: string;
 };
-type LinkRow = {
+export type LinkRow = {
   readonly link_id: string;
   readonly observer_thread_id: string;
   readonly observer_project_id: string;
@@ -124,6 +124,10 @@ export class OverseerStore extends Context.Service<
   OverseerStore,
   {
     readonly reserve: (input: Reservation) => StoreResult<LinkRow>;
+    readonly reservationFor: (
+      observer: ThreadId,
+      clientRequestId: string,
+    ) => StoreResult<LinkRow | undefined>;
     readonly acceptLaunch: (linkId: string) => StoreResult<boolean>;
     readonly linksForEndpoint: (
       threadId: ThreadId,
@@ -378,6 +382,13 @@ const make = Effect.gen(function* () {
           return rows[0]!;
         }),
       );
+    }),
+    reservationFor: Effect.fn("OverseerStore.reservationFor")(function* (observer, key) {
+      return (yield* execute(
+        "reservationFor",
+        sql<LinkRow>`SELECT * FROM overseer_links
+        WHERE observer_thread_id = ${observer} AND client_request_id = ${key}`,
+      ))[0];
     }),
     acceptLaunch: Effect.fn("OverseerStore.acceptLaunch")(function* (linkId) {
       return yield* transaction(

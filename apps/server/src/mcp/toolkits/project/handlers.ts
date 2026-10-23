@@ -14,7 +14,8 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { resolveRuntimeMode } from "../../OrchestratorMcpService.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { newCommandId, readCaller, resolveProjectId, unavailable } from "../../threadAccess.ts";
-import { ProjectToolkit } from "./tools.ts";
+import { ProjectToolkit, ProjectToolkitOverseer } from "./tools.ts";
+import * as OverseerMcp from "../../../overseer/OverseerMcp.ts";
 
 function projectFailure(error: Project.ProjectServiceError) {
   if (error._tag === "ProjectOperationError") return unavailable();
@@ -53,11 +54,13 @@ const access = Effect.gen(function* () {
   yield* readCaller();
   return yield* Project.ProjectService;
 });
-export const layer = McpToolAccess.toLayer(ProjectToolkit, {
+const handlers = {
   t3_thread_launch: McpToolAccess.startsThreads(
-    (input) => input,
+    (input) => (input.oversee === true ? {} : input),
     (input, { runtimeMode, interactionMode }) =>
       Effect.gen(function* () {
+        if (input.oversee === true || input.clientRequestId !== undefined)
+          return yield* OverseerMcp.launch(input);
         const context = yield* readCaller();
         const { caller } = context;
         const commandId = yield* newCommandId();
@@ -303,4 +306,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
       );
     }),
   ),
-});
+} satisfies McpToolAccess.Handlers<typeof ProjectToolkitOverseer.tools>;
+
+export const layer = McpToolAccess.toLayer(ProjectToolkit, handlers);
+export const layerOverseer = McpToolAccess.toLayer(ProjectToolkitOverseer, handlers);

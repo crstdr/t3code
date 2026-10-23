@@ -109,6 +109,32 @@ const requireRoot = Effect.gen(function* () {
   return Option.getOrThrow(yield* scratch.scratchRoot);
 });
 
+it.effect("reserves deterministic Scratch bindings without creating the target directory", () =>
+  withScratch(() =>
+    Effect.gen(function* () {
+      const folders = yield* ManagedProjectFolders.ManagedProjectFolders;
+      const fs = yield* FileSystem.FileSystem;
+      const scratch = yield* folders.ensureScratchProject;
+      const input = {
+        projectId: scratch.projectId,
+        threadId: ThreadId.make("overseer:long-identity-a"),
+        text: "Inspect the workspace",
+      };
+      const a = Option.getOrThrow(yield* folders.reservedThreadFolder(input));
+      const b = Option.getOrThrow(yield* folders.reservedThreadFolder(input));
+      const c = Option.getOrThrow(
+        yield* folders.reservedThreadFolder({
+          ...input,
+          threadId: ThreadId.make("overseer:long-identity-b"),
+        }),
+      );
+      assert.equal(a, b);
+      assert.notEqual(a, c);
+      assert.isFalse(yield* fs.exists(a));
+    }),
+  ),
+);
+
 it.effect("offers nothing when the data dir sits inside a Git checkout", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;

@@ -1,0 +1,5 @@
+[
+  "Attachment 'pending.png' cannot be sent: stored size does not match.",
+  "Attachment 'pending.png' cannot be sent: attachment type does not match the upload.",
+  "Attachment 'pending.png' cannot be sent: attachment not found (removed or expired)."
+]
