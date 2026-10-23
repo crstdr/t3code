@@ -44,6 +44,7 @@ import { EnvironmentToolkit } from "./toolkits/environment/tools.ts";
 import * as EnvironmentHandlers from "./toolkits/environment/handlers.ts";
 import { ProjectToolkit, ProjectToolkitOverseer } from "./toolkits/project/tools.ts";
 import * as OverseerFeature from "../overseer/OverseerFeature.ts";
+import * as OverseerMcp from "../overseer/OverseerMcp.ts";
 import * as ProjectHandlers from "./toolkits/project/handlers.ts";
 import { AttachmentToolkit } from "./toolkits/attachment/tools.ts";
 import * as AttachmentHandlers from "./toolkits/attachment/handlers.ts";
@@ -1031,10 +1032,13 @@ const layerEnvironmentToolkit = toolkitRegistration(
   EnvironmentHandlers.layer,
 ).pipe(Layer.provide(ThreadCommandExecutor.layer));
 
-const layerProjectRegistration = Layer.unwrap(
+export const layerProjectRegistration = Layer.unwrap(
   Effect.map(OverseerFeature.Enabled, (enabled) =>
     enabled
-      ? toolkitRegistration(ProjectToolkitOverseer, ProjectHandlers.layerOverseer)
+      ? Layer.merge(
+          toolkitRegistration(ProjectToolkitOverseer, ProjectHandlers.layerOverseer),
+          toolkitRegistration(OverseerMcp.LinkToolkit, OverseerMcp.layerLinks),
+        )
       : toolkitRegistration(ProjectToolkit, ProjectHandlers.layer),
   ),
 );

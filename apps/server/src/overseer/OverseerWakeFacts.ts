@@ -59,6 +59,19 @@ const explicitMessage = (message: OrchestrationV2ConversationMessage) =>
   (message.createdBy === "user" || message.creationSource === "mcp") &&
   !isNativeMaintenanceCommand(message);
 
+const viewEvents = new Set<OrchestrationV2StoredEvent["event"]["type"]>([
+  "thread.created",
+  "thread.metadata-updated",
+  "thread.archived",
+  "thread.unarchived",
+  "thread.deleted",
+  "thread.snoozed",
+  "thread.unsnoozed",
+  "run.created",
+  "run.updated",
+  "runtime-request.updated",
+]);
+
 const relevant = ({ event }: OrchestrationV2StoredEvent) => {
   switch (event.type) {
     case "run.created":
@@ -305,6 +318,9 @@ const make = Effect.gen(function* () {
     context?: CommitContext,
   ) {
     if (!(yield* OverseerFeature.Enabled)) return;
+    for (const { event } of events) {
+      if (viewEvents.has(event.type)) yield* gate.changed(event.threadId);
+    }
     const relevantEvents = events.filter(relevant);
     const affected = new Map<string, Link>();
     const affectedThreads = new Set(relevantEvents.map((stored) => stored.event.threadId));

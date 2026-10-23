@@ -55,6 +55,7 @@ it.effect("fresh application persistence applies the feature track after core mi
       { migration_id: 3, name: "Mailbox" },
       { migration_id: 4, name: "Recovery" },
       { migration_id: 5, name: "WakeControls" },
+      { migration_id: 6, name: "Api" },
     ]);
     assert.deepEqual(
       yield* sql`SELECT name FROM sqlite_schema WHERE name='overseer_attempts_run_attempt_idx'`,
@@ -79,6 +80,7 @@ it.effect("upstream-only migration guard accepts a database with namespaced feat
       [3, "Mailbox"],
       [4, "Recovery"],
       [5, "WakeControls"],
+      [6, "Api"],
     ]);
     yield* sql`INSERT INTO overseer_mailboxes(observer_thread_id, hold_mask) VALUES ('observer', 1)`;
     assert.deepEqual(yield* runCoreMigrations(), []);
@@ -103,6 +105,7 @@ it.effect("upgrades the slice-1 schema without changing existing mailbox revisio
       [3, "Mailbox"],
       [4, "Recovery"],
       [5, "WakeControls"],
+      [6, "Api"],
     ]);
     assert.deepEqual(
       yield* sql`SELECT revision FROM overseer_mailboxes WHERE observer_thread_id = 'observer'`,
@@ -140,7 +143,10 @@ it.effect(
         readonly name: string;
       }>`SELECT name FROM sqlite_schema WHERE tbl_name = 'overseer_occurrences'
         AND type IN ('index', 'trigger') AND name NOT LIKE 'sqlite_%'`;
-      assert.deepEqual(yield* runMigrations(), [[5, "WakeControls"]]);
+      assert.deepEqual(yield* runMigrations(), [
+        [5, "WakeControls"],
+        [6, "Api"],
+      ]);
       const migrated = yield* sql<{
         readonly name: string;
       }>`SELECT name FROM sqlite_schema WHERE tbl_name = 'overseer_occurrences'
@@ -191,6 +197,7 @@ it.effect("re-running the feature migrator is idempotent and preserves data", ()
       { migration_id: 3, name: "Mailbox" },
       { migration_id: 4, name: "Recovery" },
       { migration_id: 5, name: "WakeControls" },
+      { migration_id: 6, name: "Api" },
     ]);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

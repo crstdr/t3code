@@ -236,6 +236,7 @@ const make = Effect.gen(function* () {
   });
   const dirty = Effect.fn("OverseerStore.dirty")(function* (observer: string) {
     yield* sql`UPDATE overseer_mailboxes SET revision = revision + 1 WHERE observer_thread_id = ${observer}`;
+    yield* gate.changed(observer);
     yield* OverseerFlush.schedule(observer).pipe(Effect.provideService(SqlClient.SqlClient, sql));
   });
   const requireFence = Effect.fn("OverseerStore.requireFence")(function* (fence: Fence) {
@@ -251,6 +252,7 @@ const make = Effect.gen(function* () {
     reason: "cancel" | "stop" | "lifecycle",
     suppress: boolean,
   ) {
+    yield* gate.changed(observer);
     yield* sql`UPDATE overseer_attempts SET state = 'disposed', disposal_reason = ${reason}
       WHERE observer_thread_id = ${observer} AND batch_number = ${batch} AND state = 'pending'`;
     yield* sql`UPDATE overseer_occurrences SET disposition = ${suppress ? "suppressed" : "pending"}, batch_number = NULL
@@ -283,6 +285,7 @@ const make = Effect.gen(function* () {
     yield* sql`DELETE FROM overseer_background_owners WHERE link_id = ${linkId}`;
     yield* sql`DELETE FROM overseer_work_runs WHERE link_id = ${linkId}`;
     yield* dirty(row.observer_thread_id);
+    yield* gate.changed(row.target_thread_id);
     return true;
   });
   const invalidateOccurrence = Effect.fn("OverseerStore.invalidateOccurrence")(function* (
@@ -425,6 +428,8 @@ const make = Effect.gen(function* () {
         ) VALUES (${input.linkId}, ${input.observerThreadId}, ${input.observerProjectId}, ${input.targetThreadId},
           ${input.targetProjectId}, ${input.clientRequestId}, ${input.fingerprint}, ${input.launchCommandId},
           ${input.launchMessageId}, ${input.launchInputJson}) RETURNING *`;
+          yield* gate.changed(input.observerThreadId);
+          yield* gate.changed(input.targetThreadId);
           return rows[0]!;
         }),
       );
@@ -686,6 +691,7 @@ const make = Effect.gen(function* () {
           for (const entry of entries)
             yield* sql`UPDATE overseer_occurrences SET batch_number = ${number}
           WHERE link_id = ${entry.link_id} AND kind = ${entry.kind} AND source_id = ${entry.source_id}`;
+          yield* gate.changed(fence.observerThreadId);
           return {
             state: "ready" as const,
             batch: {
@@ -824,6 +830,7 @@ const make = Effect.gen(function* () {
           WHERE observer_thread_id = ${attempt.observer_thread_id} AND batch_number = ${attempt.batch_number} AND disposition = 'pending'`;
           yield* sql`UPDATE overseer_attempts SET state = 'accepted' WHERE message_id = ${messageId}`;
           yield* sql`UPDATE overseer_batches SET state = 'accepted' WHERE observer_thread_id = ${attempt.observer_thread_id} AND batch_number = ${attempt.batch_number}`;
+          yield* gate.changed(attempt.observer_thread_id);
           return true;
         }),
       );
@@ -885,6 +892,7 @@ const make = Effect.gen(function* () {
             yield* disposeBatch(observer, batch.batch_number, "stop", true);
           yield* sql`UPDATE overseer_preferences SET idle_due_at = NULL, idle_pending_token = NULL WHERE observer_thread_id = ${observer}`;
           yield* sql`UPDATE overseer_mailboxes SET epoch = epoch + 1, revision = revision + 1, retry_message_id = NULL, hold_mask = hold_mask | ${holdBits.stop} WHERE observer_thread_id = ${observer}`;
+          yield* gate.changed(observer);
           yield* OverseerFlush.schedule(observer).pipe(
             Effect.provideService(SqlClient.SqlClient, sql),
           );
@@ -902,6 +910,7 @@ const make = Effect.gen(function* () {
           yield* sql`UPDATE overseer_preferences SET idle_due_at = NULL, idle_pending_token = NULL WHERE observer_thread_id = ${observer}`;
           yield* sql`UPDATE overseer_mailboxes SET epoch = epoch + 1, revision = revision + 1,
           hold_mask = hold_mask | ${holdBits[reason]} WHERE observer_thread_id = ${observer}`;
+          yield* gate.changed(observer);
           yield* OverseerFlush.schedule(observer).pipe(
             Effect.provideService(SqlClient.SqlClient, sql),
           );
@@ -919,6 +928,7 @@ const make = Effect.gen(function* () {
             yield* Policy.syncIdleState(observer).pipe(
               Effect.provideService(SqlClient.SqlClient, sql),
             );
+            yield* gate.changed(observer);
             yield* OverseerFlush.schedule(observer).pipe(
               Effect.provideService(SqlClient.SqlClient, sql),
             );
@@ -936,6 +946,7 @@ const make = Effect.gen(function* () {
             yield* Policy.syncIdleState(observer).pipe(
               Effect.provideService(SqlClient.SqlClient, sql),
             );
+            yield* gate.changed(observer);
             yield* OverseerFlush.schedule(observer).pipe(
               Effect.provideService(SqlClient.SqlClient, sql),
             );
@@ -961,6 +972,7 @@ const make = Effect.gen(function* () {
       yield* transaction(
         "endpointArchived",
         Effect.gen(function* () {
+          yield* gate.changed(threadId);
           const links = yield* endpointLinks(threadId);
           for (const link of links) yield* invalidateLink(link.link_id);
           for (const observer of new Set(links.map((link) => link.observer_thread_id)))
@@ -972,6 +984,7 @@ const make = Effect.gen(function* () {
       yield* transaction(
         "endpointUnarchived",
         Effect.gen(function* () {
+          yield* gate.changed(threadId);
           const observers = new Set(
             (yield* endpointLinks(threadId)).map((row) => row.observer_thread_id),
           );
@@ -985,6 +998,7 @@ const make = Effect.gen(function* () {
       yield* transaction(
         "endpointDeleted",
         Effect.gen(function* () {
+          yield* gate.changed(threadId);
           for (const link of yield* endpointLinks(threadId))
             yield* closeLink(link.link_id, "endpoint_deleted");
           yield* retireMailbox(threadId);
@@ -995,6 +1009,7 @@ const make = Effect.gen(function* () {
       yield* transaction(
         "projectDeleted",
         Effect.gen(function* () {
+          yield* gate.changed(`project:${projectId}`);
           const links = yield* sql<{ readonly link_id: string }>`
             SELECT link_id FROM overseer_links WHERE state = 'active' AND observer_project_id = ${projectId}
             UNION SELECT link_id FROM overseer_links WHERE state = 'active' AND target_project_id = ${projectId}`;
@@ -1025,6 +1040,7 @@ const make = Effect.gen(function* () {
         yield* sql`DELETE FROM overseer_links`;
         yield* sql`DELETE FROM overseer_preferences`;
         yield* sql`DELETE FROM overseer_mailboxes`;
+        yield* gate.changed("*");
       }),
     ),
   });

@@ -51,7 +51,11 @@
         "graphql.config.ts",
       ],
       // The generated operations export every selection's class.
-      "ignoreIssues": { "**/*.graphql.ts": ["exports", "types", "namespaceMembers"] },
+      "ignoreIssues": {
+        "**/*.graphql.ts": ["exports", "types", "namespaceMembers"],
+        // Keep the upstream descriptor implementation intact for the disabled differential fixture.
+        "src/environment/ServerEnvironment.upstream.testkit.ts": ["exports", "types"],
+      },
       // Keep the transitive Effect runtime pinned for standalone npm installs.
       // The Vite+ web build prerequisite.
       // Native and disk-loaded provider packages stay external to the bundle; the
@@ -119,6 +123,11 @@
     "packages/*": {
       // These workspace packages are private to this monorepo.
       "includeEntryExports": true,
+    },
+    "packages/contracts": {
+      "includeEntryExports": true,
+      // Compatibility runs the complete frozen official decoder, including unused public exports.
+      "ignoreIssues": { "src/fixtures/official-v0.1.2/**": ["exports", "types"] },
     },
     "packages/effect-acp": {
       "includeEntryExports": true,

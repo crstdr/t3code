@@ -1,0 +1,25 @@
+{
+  "tag": "v0.1.2",
+  "commit": "044f07257c9684ae4543bd1e1ebf9c394e9e3830",
+  "sourceSha256": {
+    "orchestrationV2.ts": "e6b3aa538cc1fc49c6260805e3061efee6eeb44ec86c38a4489bf52ee8485924",
+    "composerContext.ts": "2bbf442c8e412fd97e0ee64331af7c5330dd63935db51f4107944e2e5974b1a9",
+    "baseSchemas.ts": "dbad36554ede5a42e01f3d7d8b4951c5dea9aafb7b7d274e292fb677e87f2d1c",
+    "chatAttachment.ts": "0a20a2966b2b6e1f738497bc7feba2ca70dc9c06b6004a5cc9bcff8bdde4acb7",
+    "checkpointDiff.ts": "dce958ecb4a6e253b25a82f69bd60ba897d811acebb231d0622b4642552320e4",
+    "modelSelection.ts": "54832cd6d41fae198eca90fe58cfceab4f6b97572c90e32cbfff703b584b434a",
+    "model.ts": "3c74149e452ac27eddd9a6e0375f0a91a218e580aad9323aaae093a0f9fac3e3",
+    "providerInstance.ts": "9d9423cf5570c5b41f1afb23a454c39b606638e6e734230b0dadfde65a4f222c",
+    "threadPullRequest.ts": "9c925ae45d9184adad0cfeb5c8e7ad2b57fe5e5b4b3347548edc37fb52385845",
+    "pullRequest.ts": "0536c5814e6d1890fc87472680fbaff9f602670ba157504d452baeb1c5ca58ef",
+    "sourceControl.ts": "78c7088439f411736e7322599937b244f9fbfe4e9804aeb6e7fa6b0f9a888364",
+    "vcs.ts": "801a0e380e58f08f4effbd7f182bc355bdc59f2b4b886ed44dae733f956e5d63",
+    "providerPolicy.ts": "80b51a5a10eba06793fb4efed1932386681db62f1bff2fe5f78b2aa8173ac5e0",
+    "orchestrationProject.ts": "b98ea4a2cf943aa5de7ade4d64c8cb74d8bf6f8fb77b47f458d64cbc965d1e09",
+    "environment.ts": "ed7251847b9cf4cd2f7232fff2a26ada475e227aff8ccfb892b055c0c648e803",
+    "project.ts": "3bb559ee28addc1a4d0050e8ecbb075f535a3e6229425a23138b45590b379a83",
+    "providerRuntime.ts": "4f25a2354313de49f6d7bf79345deeae9c1447b67a7db11cc51fdc1af7fd732b",
+    "providerUsageLimits.ts": "658f48cfc03949f8c17e2d46925b8b2e97097e59c6babeae64fa47f7ef5f1778",
+    "usageLimitSourceId.ts": "25eb6c0dde8060fb5e6f68d47a4ce7eccb0f829c99b1492d8dc440ba7fc6cf53"
+  }
+}

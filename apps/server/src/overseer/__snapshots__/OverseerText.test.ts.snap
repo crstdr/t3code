@@ -431,7 +431,7 @@ exports[`keeps the unapproved catalog hidden by default and snapshots the exact 
         "openWorldHint": true,
         "readOnlyHint": false,
       },
-      "description": "Create an ordinary TOP-LEVEL thread with an explicit workspace binding before its agent starts. Use this when the user requests independent work, a new thread, or a PR stack in its own worktree; use delegate_task for child subagents. Set workspaceStrategy to {type:"worktree",baseRef:"parent-branch",branch:"new-branch",startFromOrigin:false} for a new worktree based on local commits, or {type:"existing_worktree",worktreePath:"/absolute/path",branch:"existing-branch"} to use an existing checkout. To fetch and start from the base branch's remote, set startFromOrigin:true. Omitted workspaceStrategy means the project root, NOT the caller's worktree. Omit projectId/modelSelection/modes to inherit those settings from the calling thread; a caller outside a T3 thread must pass projectId and gets the project's default model. Set scratch:true instead of projectId for a thread without a project: it runs in a fresh folder of its own, outside any repository. Put the task in message. Do not ask the agent to create its own worktree via shell: that does not update the thread binding. Without oversee:true, each call creates a new launch. With oversee:true, clientRequestId identifies a retry of the same launch. Retain threadId and use t3_thread_read/t3_thread_wait to follow preparation. To link a thread for the user, write \`[title](t3-thread://v1/<threadId>)\` with the threadId exactly as returned, not URL-encoded; T3 Code shows the thread's current title. After errors or lost responses, reuse clientRequestId for an overseen launch; otherwise inspect t3_thread_list before retrying. Attachments must be pending uploads. The new thread may not run with broader runtime or interaction modes than the caller: the calling T3 thread's own modes, or the permission mode an outside agent was approved with. Set oversee:true to receive completion and user-input-question notices from the new thread. The link grants no additional access or answering authority.",
+      "description": "Create an ordinary TOP-LEVEL thread with an explicit workspace binding before its agent starts. Use this when the user requests independent work, a new thread, or a PR stack in its own worktree; use delegate_task for child subagents. Set workspaceStrategy to {type:"worktree",baseRef:"parent-branch",branch:"new-branch",startFromOrigin:false} for a new worktree based on local commits, or {type:"existing_worktree",worktreePath:"/absolute/path",branch:"existing-branch"} to use an existing checkout. To fetch and start from the base branch's remote, set startFromOrigin:true. Omitted workspaceStrategy means the project root, NOT the caller's worktree. Omit projectId/modelSelection/modes to inherit those settings from the calling thread; a caller outside a T3 thread must pass projectId and gets the project's default model. Set scratch:true instead of projectId for a thread without a project: it runs in a fresh folder of its own, outside any repository. Put the task in message. Do not ask the agent to create its own worktree via shell: that does not update the thread binding. Without oversee:true, each call creates a new launch. With oversee:true, clientRequestId identifies a retry of the same launch. Retain threadId and use t3_thread_read/t3_thread_wait to follow preparation. To link a thread for the user, write \`[title](t3-thread://v1/<threadId>)\` with the threadId exactly as returned, not URL-encoded; T3 Code shows the thread's current title. After errors or lost responses, reuse clientRequestId with identical arguments for an overseen launch; otherwise inspect t3_thread_list before retrying. Attachments must be pending uploads. The new thread may not run with broader runtime or interaction modes than the caller: the calling T3 thread's own modes, or the permission mode an outside agent was approved with. Set oversee:true to receive completion, user-input-question and approval notices about the new thread. The oversight link grants no additional access and no authority to answer or approve.",
       "inputSchema": {
         "additionalProperties": true,
         "properties": {
@@ -620,7 +620,7 @@ exports[`keeps the unapproved catalog hidden by default and snapshots the exact 
           "oversee": {
             "anyOf": [
               {
-                "description": "Create a durable link from this calling T3 thread to the new top-level thread. Requires clientRequestId. Default false.",
+                "description": "Create a durable link from this calling T3 thread to the new top-level thread. Requires clientRequestId and a non-empty message. Default false.",
                 "type": "boolean",
               },
               {
@@ -878,34 +878,34 @@ exports[`keeps the unapproved catalog hidden by default and snapshots the exact 
     },
   ],
   "entryBytes": {
-    "enabled": 6357,
+    "enabled": 6442,
     "ordinary": 5589,
   },
   "errors": [
-    "oversee:true requires a calling T3 thread.",
+    "oversee:true requires a calling top-level T3 thread.",
     "clientRequestId is required with oversee:true.",
     "clientRequestId is supported only with oversee:true.",
-    "This clientRequestId was already used with different launch arguments. Use the original arguments or a new key.",
-    "This provider is not supported for oversight in v1. Use Codex or Claude, or launch without oversee:true.",
+    "This clientRequestId was already used with different launch arguments. To retry that launch, repeat its original arguments; use a new key only for a different task.",
+    "Oversight requires Codex or Claude for both this thread and the new thread; otherwise launch without oversee:true.",
     "The oversight link is not available to this calling thread.",
-    "The launch is reserved but not finished. Retry with the same clientRequestId.",
+    "The launch is reserved but not finished. Retry with the same clientRequestId and identical arguments; if this repeats, tell the user instead of starting another launch.",
     "Oversight storage is unavailable. The overseen launch was not started.",
-    "oversee:true requires message.",
+    "oversee:true requires a non-empty message.",
   ],
   "strings": {
-    "E1": "oversee:true requires a calling T3 thread.",
+    "E1": "oversee:true requires a calling top-level T3 thread.",
     "E2": "clientRequestId is required with oversee:true.",
     "E3": "clientRequestId is supported only with oversee:true.",
-    "E4": "This clientRequestId was already used with different launch arguments. Use the original arguments or a new key.",
-    "E5": "This provider is not supported for oversight in v1. Use Codex or Claude, or launch without oversee:true.",
+    "E4": "This clientRequestId was already used with different launch arguments. To retry that launch, repeat its original arguments; use a new key only for a different task.",
+    "E5": "Oversight requires Codex or Claude for both this thread and the new thread; otherwise launch without oversee:true.",
     "E6": "The oversight link is not available to this calling thread.",
-    "E7": "The launch is reserved but not finished. Retry with the same clientRequestId.",
+    "E7": "The launch is reserved but not finished. Retry with the same clientRequestId and identical arguments; if this repeats, tell the user instead of starting another launch.",
     "E8": "Oversight storage is unavailable. The overseen launch was not started.",
-    "E9": "oversee:true requires message.",
+    "E9": "oversee:true requires a non-empty message.",
     "T1": "Without oversee:true, each call creates a new launch. With oversee:true, clientRequestId identifies a retry of the same launch. Retain threadId and use t3_thread_read/t3_thread_wait to follow preparation.",
-    "T2": "After errors or lost responses, reuse clientRequestId for an overseen launch; otherwise inspect t3_thread_list before retrying.",
-    "T3": "Set oversee:true to receive completion and user-input-question notices from the new thread. The link grants no additional access or answering authority.",
-    "T4": "Create a durable link from this calling T3 thread to the new top-level thread. Requires clientRequestId. Default false.",
+    "T2": "After errors or lost responses, reuse clientRequestId with identical arguments for an overseen launch; otherwise inspect t3_thread_list before retrying.",
+    "T3": "Set oversee:true to receive completion, user-input-question and approval notices about the new thread. The oversight link grants no additional access and no authority to answer or approve.",
+    "T4": "Create a durable link from this calling T3 thread to the new top-level thread. Requires clientRequestId and a non-empty message. Default false.",
     "T5": "Required with oversee:true only. Reuse this key with identical launch arguments after a lost response; a different task needs a new key.",
   },
 }
@@ -914,7 +914,7 @@ exports[`keeps the unapproved catalog hidden by default and snapshots the exact 
 exports[`snapshots the W3-only idle input as received by Claude 1`] = `
 {
   "message": {
-    "content": "[Periodic wake-up. Perform only checks or follow-ups previously requested by the user. If none are due, take no action and return to idle.]",
+    "content": "[Periodic wake-up. Perform only checks or follow-ups previously requested by the user. If none are due, end your turn without taking action.]",
     "role": "user",
   },
   "parent_tool_use_id": null,
@@ -923,15 +923,33 @@ exports[`snapshots the W3-only idle input as received by Claude 1`] = `
 }
 `;
 
+exports[`snapshots the draft link catalog with exactly list and unlink 1`] = `
+{
+  "encodedCatalog": "{"name":"t3_thread_link","description":"List or unlink oversight links involving this calling thread. Unlink is permanent: it stops future notices, not the other thread. Links grant no additional authority. Use t3_thread_read and t3_thread_send for permitted reads and messages.","inputSchema":{"type":"object","properties":{"op":{"type":"string","enum":["list","unlink"],"description":"list returns this thread's incoming and outgoing links; unlink closes linkId."},"cursor":{"type":"string","description":"For list, continue from the returned nextCursor. Omit for the first page."},"linkId":{"type":"string","description":"Required for unlink. Use a linkId returned by t3_thread_launch or by list."}},"required":["op"],"additionalProperties":true},"outputSchema":{"type":"object","properties":{"links":{"type":"array","items":{"type":"object","properties":{"linkId":{"type":"string"},"observerThreadId":{"type":"string"},"targetThreadId":{"type":"string"},"projectId":{"type":"string"},"title":{"type":"string"},"titleTruncated":{"type":"boolean","enum":[true]},"workerStatus":{"type":"string","enum":["idle","preparing","queued","starting","running","waiting","completed","interrupted","failed","cancelled","rolled_back","reserved","archived","deleted"]},"pendingRequestCount":{"type":"integer","minimum":0,"maximum":9007199254740991},"deliveryState":{"type":"string","enum":["pending","queued","accepted","held","error","closed"]}},"required":["linkId","observerThreadId","targetThreadId","projectId","title","workerStatus","pendingRequestCount","deliveryState"],"additionalProperties":true}},"nextCursor":{"type":"string"},"linkId":{"type":"string"},"closed":{"type":"boolean","enum":[true]}},"additionalProperties":true},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}}",
+  "entryBytes": 1831,
+  "strings": {
+    "caller": "This operation requires a calling T3 thread.",
+    "cursor": "For list, continue from the returned nextCursor. Omit for the first page.",
+    "description": "List or unlink oversight links involving this calling thread. Unlink is permanent: it stops future notices, not the other thread. Links grant no additional authority. Use t3_thread_read and t3_thread_send for permitted reads and messages.",
+    "invalid_cursor": "The oversight cursor is not valid for this thread.",
+    "linkId": "Required for unlink. Use a linkId returned by t3_thread_launch or by list.",
+    "not_found": "The oversight link or thread was not found.",
+    "op": "list returns this thread's incoming and outgoing links; unlink closes linkId.",
+    "unavailable": "Oversight storage is unavailable.",
+    "unsupported": "Thread oversight is not supported.",
+  },
+}
+`;
+
 exports[`snapshots the native Claude wake representation for 1 entries 1`] = `
 {
-  "bodyBytes": 422,
-  "envelopeBytes": 439,
+  "bodyBytes": 435,
+  "envelopeBytes": 452,
   "native": {
     "message": {
       "content": "Oversight updates (batch 9c2c2e38-8138-4bf8-bfd0-92b187416efa:12). Links grant no additional authority.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522760, run bfa651c0-2c59-4270-aac5-65c7713f7a00: completed.
-Read permitted output with t3_thread_read; approvals appear in view='activity'. Read pending questions with t3_pending_request_read. A notice is not permission to answer or approve; surface needed user input to the user.",
+Read permitted output with t3_thread_read; approvals appear in view='activity'. Read pending questions with t3_pending_request_read. A notice is not permission to answer or approve; surface needed user input or approvals to the user.",
       "role": "user",
     },
     "parent_tool_use_id": null,
@@ -944,7 +962,7 @@ Read permitted output with t3_thread_read; approvals appear in view='activity'. 
       "content": "Ultrathink:
 Oversight updates (batch 9c2c2e38-8138-4bf8-bfd0-92b187416efa:12). Links grant no additional authority.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522760, run bfa651c0-2c59-4270-aac5-65c7713f7a00: completed.
-Read permitted output with t3_thread_read; approvals appear in view='activity'. Read pending questions with t3_pending_request_read. A notice is not permission to answer or approve; surface needed user input to the user.",
+Read permitted output with t3_thread_read; approvals appear in view='activity'. Read pending questions with t3_pending_request_read. A notice is not permission to answer or approve; surface needed user input or approvals to the user.",
       "role": "user",
     },
     "parent_tool_use_id": null,
@@ -956,20 +974,20 @@ Read permitted output with t3_thread_read; approvals appear in view='activity'. 
 
 exports[`snapshots the native Claude wake representation for 8 entries 1`] = `
 {
-  "bodyBytes": 1196,
-  "envelopeBytes": 1213,
+  "bodyBytes": 1219,
+  "envelopeBytes": 1236,
   "native": {
     "message": {
       "content": "Oversight updates (batch 9c2c2e38-8138-4bf8-bfd0-92b187416efa:12). Links grant no additional authority.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522760, run bfa651c0-2c59-4270-aac5-65c7713f7a00: completed.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522761, request 15679e63-c80b-44b2-9c73-d4bb8dad9371: user-input question pending.
-Thread 4a62f3d9-5d14-44f0-94a7-9c835c522762, request 15679e63-c80b-44b2-9c73-d4bb8dad9372: approval pending.
+Thread 4a62f3d9-5d14-44f0-94a7-9c835c522762, request 15679e63-c80b-44b2-9c73-d4bb8dad9372: user approval pending.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522763, request 15679e63-c80b-44b2-9c73-d4bb8dad9373: user-input question pending.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522764, run bfa651c0-2c59-4270-aac5-65c7713f7a04: completed.
-Thread 4a62f3d9-5d14-44f0-94a7-9c835c522765, request 15679e63-c80b-44b2-9c73-d4bb8dad9375: approval pending.
+Thread 4a62f3d9-5d14-44f0-94a7-9c835c522765, request 15679e63-c80b-44b2-9c73-d4bb8dad9375: user approval pending.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522766, run bfa651c0-2c59-4270-aac5-65c7713f7a06: completed.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522767, request 15679e63-c80b-44b2-9c73-d4bb8dad9377: user-input question pending.
-Read permitted output with t3_thread_read; approvals appear in view='activity'. Read pending questions with t3_pending_request_read. A notice is not permission to answer or approve; surface needed user input to the user.",
+Read permitted output with t3_thread_read; approvals appear in view='activity'. Read pending questions with t3_pending_request_read. A notice is not permission to answer or approve; surface needed user input or approvals to the user.",
       "role": "user",
     },
     "parent_tool_use_id": null,
@@ -983,13 +1001,13 @@ Read permitted output with t3_thread_read; approvals appear in view='activity'. 
 Oversight updates (batch 9c2c2e38-8138-4bf8-bfd0-92b187416efa:12). Links grant no additional authority.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522760, run bfa651c0-2c59-4270-aac5-65c7713f7a00: completed.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522761, request 15679e63-c80b-44b2-9c73-d4bb8dad9371: user-input question pending.
-Thread 4a62f3d9-5d14-44f0-94a7-9c835c522762, request 15679e63-c80b-44b2-9c73-d4bb8dad9372: approval pending.
+Thread 4a62f3d9-5d14-44f0-94a7-9c835c522762, request 15679e63-c80b-44b2-9c73-d4bb8dad9372: user approval pending.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522763, request 15679e63-c80b-44b2-9c73-d4bb8dad9373: user-input question pending.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522764, run bfa651c0-2c59-4270-aac5-65c7713f7a04: completed.
-Thread 4a62f3d9-5d14-44f0-94a7-9c835c522765, request 15679e63-c80b-44b2-9c73-d4bb8dad9375: approval pending.
+Thread 4a62f3d9-5d14-44f0-94a7-9c835c522765, request 15679e63-c80b-44b2-9c73-d4bb8dad9375: user approval pending.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522766, run bfa651c0-2c59-4270-aac5-65c7713f7a06: completed.
 Thread 4a62f3d9-5d14-44f0-94a7-9c835c522767, request 15679e63-c80b-44b2-9c73-d4bb8dad9377: user-input question pending.
-Read permitted output with t3_thread_read; approvals appear in view='activity'. Read pending questions with t3_pending_request_read. A notice is not permission to answer or approve; surface needed user input to the user.",
+Read permitted output with t3_thread_read; approvals appear in view='activity'. Read pending questions with t3_pending_request_read. A notice is not permission to answer or approve; surface needed user input or approvals to the user.",
       "role": "user",
     },
     "parent_tool_use_id": null,
@@ -1006,18 +1024,25 @@ exports[`snapshots the verbatim W1 envelope and W2 summary without interpolated 
     "text": "Oversight updates (batch observer:1). Links grant no additional authority.
 Thread worker, run run:1: interrupted.
 Thread worker, request request:1: user-input question pending.
-Thread worker, request permission:1: approval pending.
-Read permitted output with t3_thread_read; approvals appear in view='activity'. Read pending questions with t3_pending_request_read. A notice is not permission to answer or approve; surface needed user input to the user.",
+Thread worker, request permission:1: user approval pending.
+Read permitted output with t3_thread_read; approvals appear in view='activity'. Read pending questions with t3_pending_request_read. A notice is not permission to answer or approve; surface needed user input or approvals to the user.",
   },
   "strings": {
     "W1": "Oversight updates (batch {batchId}). Links grant no additional authority.
 {entries}
-Read permitted output with t3_thread_read; approvals appear in view='activity'. Read pending questions with t3_pending_request_read. A notice is not permission to answer or approve; surface needed user input to the user.",
+Read permitted output with t3_thread_read; approvals appear in view='activity'. Read pending questions with t3_pending_request_read. A notice is not permission to answer or approve; surface needed user input or approvals to the user.",
     "W2": "Oversight updates",
-    "W3": "[Periodic wake-up. Perform only checks or follow-ups previously requested by the user. If none are due, take no action and return to idle.]",
-    "approval": "Thread {threadId}, request {requestId}: approval pending.",
+    "W3": "[Periodic wake-up. Perform only checks or follow-ups previously requested by the user. If none are due, end your turn without taking action.]",
+    "approval": "Thread {threadId}, request {requestId}: user approval pending.",
     "completion": "Thread {threadId}, run {runId}: {outcome}.",
     "question": "Thread {threadId}, request {requestId}: user-input question pending.",
   },
+}
+`;
+
+exports[`the disabled project's actual MCP catalog is byte-identical to pinned upstream 1`] = `
+{
+  "enabledCatalogBytes": 32972,
+  "ordinaryCatalogBytes": 30287,
 }
 `;
