@@ -923,6 +923,24 @@ exports[`snapshots the W3-only idle input as received by Claude 1`] = `
 }
 `;
 
+exports[`snapshots the draft link catalog with exactly list and unlink 1`] = `
+{
+  "encodedCatalog": "{"name":"t3_thread_link","description":"List or unlink oversight relationships involving this calling thread. Unlink stops future notices, not the other thread. Links grant no additional authority. Use existing thread tools for permitted reads and messages.","inputSchema":{"type":"object","properties":{"op":{"type":"string","enum":["list","unlink"],"description":"list returns this thread's incoming and outgoing links; unlink closes linkId."},"cursor":{"type":"string","description":"For list, continue from the returned nextCursor. Omit for the first page."},"linkId":{"type":"string","description":"Required for unlink. Use an ID returned by launch or list."}},"required":["op"],"additionalProperties":true},"outputSchema":{"type":"object","properties":{"links":{"type":"array","items":{"type":"object","properties":{"linkId":{"type":"string"},"observerThreadId":{"type":"string"},"targetThreadId":{"type":"string"},"projectId":{"type":"string"},"title":{"type":"string"},"titleTruncated":{"type":"boolean","enum":[true]},"workerStatus":{"type":"string","enum":["idle","preparing","queued","starting","running","waiting","completed","interrupted","failed","cancelled","rolled_back","reserved","archived","deleted"]},"pendingRequestCount":{"type":"integer","minimum":0,"maximum":9007199254740991},"deliveryState":{"type":"string","enum":["pending","queued","accepted","held","error","closed"]}},"required":["linkId","observerThreadId","targetThreadId","projectId","title","workerStatus","pendingRequestCount","deliveryState"],"additionalProperties":true}},"nextCursor":{"type":"string"},"linkId":{"type":"string"},"closed":{"type":"boolean","enum":[true]}},"additionalProperties":true},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}}",
+  "entryBytes": 1794,
+  "strings": {
+    "caller": "This operation requires a calling T3 thread.",
+    "cursor": "For list, continue from the returned nextCursor. Omit for the first page.",
+    "description": "List or unlink oversight relationships involving this calling thread. Unlink stops future notices, not the other thread. Links grant no additional authority. Use existing thread tools for permitted reads and messages.",
+    "invalid_cursor": "The oversight cursor is not valid for this thread.",
+    "linkId": "Required for unlink. Use an ID returned by launch or list.",
+    "not_found": "The oversight link or thread was not found.",
+    "op": "list returns this thread's incoming and outgoing links; unlink closes linkId.",
+    "unavailable": "Oversight storage is unavailable.",
+    "unsupported": "Thread oversight is not supported.",
+  },
+}
+`;
+
 exports[`snapshots the native Claude wake representation for 1 entries 1`] = `
 {
   "bodyBytes": 422,

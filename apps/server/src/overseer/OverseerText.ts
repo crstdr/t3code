@@ -1,4 +1,17 @@
 // Unapproved §7 drafts. Only the disabled-by-default oversight feature uses these.
+export const linkText = {
+  description:
+    "List or unlink oversight relationships involving this calling thread. Unlink stops future notices, not the other thread. Links grant no additional authority. Use existing thread tools for permitted reads and messages.",
+  op: "list returns this thread's incoming and outgoing links; unlink closes linkId.",
+  linkId: "Required for unlink. Use an ID returned by launch or list.",
+  cursor: "For list, continue from the returned nextCursor. Omit for the first page.",
+  caller: "This operation requires a calling T3 thread.",
+  unsupported: "Thread oversight is not supported.",
+  not_found: "The oversight link or thread was not found.",
+  invalid_cursor: "The oversight cursor is not valid for this thread.",
+  unavailable: "Oversight storage is unavailable.",
+} as const;
+
 export const launchText = {
   T1: "Without oversee:true, each call creates a new launch. With oversee:true, clientRequestId identifies a retry of the same launch. Retain threadId and use t3_thread_read/t3_thread_wait to follow preparation.",
   T2: "After errors or lost responses, reuse clientRequestId for an overseen launch; otherwise inspect t3_thread_list before retrying.",

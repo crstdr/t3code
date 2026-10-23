@@ -26,6 +26,7 @@ import { Atom, AtomRegistry, AsyncResult } from "effect/reactivity";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { createCommandPermissions } from "./commandPermissions.ts";
 import { createEnvironmentRpcCommand } from "./runtime.ts";
+import { createOverseerEnvironmentAtoms } from "./overseer.ts";
 
 vi.mock("./session.ts", () => ({
   createEnvironmentSessionAtoms: () => ({ sessionStateAtom: sessions }),
@@ -60,6 +61,32 @@ const setup = Effect.gen(function* () {
 });
 
 describe("command permissions", () => {
+  it.effect(
+    "oversight unlink requires operate on the destination, not read or another environment's grant",
+    () =>
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const unlink = createCommandPermissions(runtime, WS_METHODS.oversightUnlink);
+        const command = createOverseerEnvironmentAtoms(runtime).unlink;
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthOrchestrationReadScope],
+            permissions: [AuthOrchestrationReadScope],
+          }),
+        );
+        registry.set(sessions(other), AsyncResult.success(grant(true)));
+        expect(registry.get(unlink.permissionAtom(env))).toBe(false);
+        expect(registry.get(command.permissionAtom(env))).toBe(false);
+        expect((yield* unlink.authorize(registry, env).pipe(Effect.flip)).requiredScope).toBe(
+          AuthOrchestrationOperateScope,
+        );
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(unlink.permissionAtom(env))).toBe(true);
+        yield* unlink.authorize(registry, env);
+      }),
+  );
   it.effect("requires the destination preview grant to close a browser tab", () =>
     Effect.scoped(
       Effect.gen(function* () {

@@ -7,7 +7,7 @@ import { McpServer } from "effect/ai";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { ChatAttachmentId } from "@t3tools/contracts";
-import { toolkitRegistration } from "../mcp/McpHttpServer.ts";
+import { toolkitRegistration, layerProjectRegistration } from "../mcp/McpHttpServer.ts";
 import * as Handlers from "../mcp/toolkits/project/handlers.ts";
 import * as Repositories from "../sourceControl/SourceControlRepositoryService.ts";
 import { createPendingAttachmentId } from "../attachmentStore.ts";
@@ -19,7 +19,8 @@ import pinnedAttachmentFailures from "./fixtures/upstream-96f09c6558-attachment-
 import { Tool } from "effect/ai";
 import { ProjectToolkit, ProjectToolkitOverseer } from "../mcp/toolkits/project/tools.ts";
 import * as Feature from "./OverseerFeature.ts";
-import { launchText, wakeText, renderWake, type WakeEntry } from "./OverseerText.ts";
+import * as OverseerMcp from "./OverseerMcp.ts";
+import { linkText, launchText, wakeText, renderWake, type WakeEntry } from "./OverseerText.ts";
 import { makeClaudeUserMessage } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import { wakeExample, sampleNativeUuid } from "./OverseerText.testkit.ts";
 import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
@@ -76,10 +77,15 @@ it("splits by complete entries at eight and 2048 UTF-8 bytes, never truncating a
 });
 
 // Register against Effect's in-memory MCP registry, without a transport or listener.
-const renderCatalog = Effect.fn("test.overseer.catalog")(function* (overseen = false) {
-  const registration = overseen
-    ? toolkitRegistration(ProjectToolkitOverseer, Handlers.layerOverseer)
-    : toolkitRegistration(ProjectToolkit, Handlers.layer);
+const renderCatalog = Effect.fn("test.overseer.catalog")(function* (
+  overseen = false,
+  links = false,
+) {
+  const registration = links
+    ? toolkitRegistration(OverseerMcp.LinkToolkit, OverseerMcp.layerLinks)
+    : overseen
+      ? toolkitRegistration(ProjectToolkitOverseer, Handlers.layerOverseer)
+      : layerProjectRegistration;
   return yield* Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     return server.tools.map(({ tool }) => tool);
@@ -99,11 +105,31 @@ const renderCatalog = Effect.fn("test.overseer.catalog")(function* (overseen = f
   );
 });
 
+it.effect("snapshots the draft link catalog with exactly list and unlink", () =>
+  Effect.gen(function* () {
+    const catalog = yield* renderCatalog(true, true);
+    assert.equal(catalog.length, 1);
+    assert.equal(catalog[0]!.name, "t3_thread_link");
+    assert.equal(catalog[0]!.inputSchema.type, "object");
+    assert.equal(catalog[0]!.outputSchema?.type, "object");
+    expect({
+      strings: linkText,
+      encodedCatalog: JSON.stringify(catalog[0]),
+      entryBytes: Buffer.byteLength(JSON.stringify(catalog[0])),
+    }).toMatchSnapshot();
+  }),
+);
+
 // Captured by toolkitRegistration from git-show 11adcb0e25:.../project/tools.ts
 // (blob 2114565d8201ea11c085f43a7c1c3e17b0c7d7ea), not Tool.getJsonSchema.
 it.effect("the disabled project's actual MCP catalog is byte-identical to pinned upstream", () =>
   Effect.gen(function* () {
     assert.equal(JSON.stringify(yield* renderCatalog()), JSON.stringify(pinnedCatalog));
+    const enabled = yield* renderCatalog().pipe(Effect.provideService(Feature.Enabled, true));
+    assert.deepEqual(
+      enabled.map((tool) => tool.name).sort(),
+      [...Object.keys(ProjectToolkitOverseer.tools), "t3_thread_link"].sort(),
+    );
   }),
 );
 

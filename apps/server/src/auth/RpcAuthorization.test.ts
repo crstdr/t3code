@@ -29,6 +29,46 @@ import {
 import * as RpcAuthorization from "./RpcAuthorization.ts";
 
 describe("RPC authorization scopes", () => {
+  it.effect("oversight read credentials can watch but cannot unlink", () =>
+    Effect.gen(function* () {
+      const tested = [WS_METHODS.oversightWatch, WS_METHODS.oversightUnlink] as const;
+      const group = WsRpcGroup.omit(
+        ...[...WsRpcGroup.requests.keys()].filter(
+          (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, (typeof tested)[number]> =>
+            !(tested as ReadonlyArray<string>).includes(tag),
+        ),
+      );
+      let writes = 0;
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            group.toLayerHandler(WS_METHODS.oversightWatch, () =>
+              Stream.succeed({ revision: 0, links: [] }),
+            ),
+            group.toLayerHandler(WS_METHODS.oversightUnlink, (input) =>
+              Effect.sync(() => {
+                writes++;
+                return { linkId: input.linkId, closed: true as const };
+              }),
+            ),
+            RpcAuthorization.layer([AuthOrchestrationReadScope]),
+          ),
+        ),
+      );
+      expect(
+        yield* Stream.runCollect(
+          client[WS_METHODS.oversightWatch]({ threadId: ThreadId.make("thread") }),
+        ),
+      ).toEqual([{ revision: 0, links: [] }]);
+      expect(
+        yield* client[WS_METHODS.oversightUnlink]({ linkId: "link" }).pipe(Effect.flip),
+      ).toMatchObject({
+        _tag: "EnvironmentAuthorizationError",
+        requiredPermission: AuthOrchestrationOperateScope,
+      });
+      expect(writes).toBe(0);
+    }),
+  );
   it("declares exactly one scope for every RPC in the server group", () => {
     expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
   });
