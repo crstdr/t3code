@@ -7,6 +7,8 @@ import {
   type OversightPage,
   type OversightLink,
   type OversightUnlinkInput,
+  type OversightConfigureInput,
+  type OversightPreferences,
   OversightLinkInput,
   OrchestratorMcpFailure,
 } from "@t3tools/contracts";
@@ -24,6 +26,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Gate from "./OverseerGate.ts";
 import * as Store from "./OverseerStore.ts";
 import * as Feature from "./OverseerFeature.ts";
+import * as Preferences from "./OverseerPreferences.ts";
 import * as Launch from "./OverseerLaunchService.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 
@@ -42,6 +45,9 @@ export class OverseerService extends Context.Service<
     readonly watch: (
       input: OversightWatchInput,
     ) => Stream.Stream<OversightWatchFrame, OversightError>;
+    readonly configure: (
+      input: OversightConfigureInput,
+    ) => Effect.Effect<OversightPreferences, OversightError>;
     readonly unlink: (
       input: OversightUnlinkInput,
       caller?: ThreadId,
@@ -50,7 +56,7 @@ export class OverseerService extends Context.Service<
 >()("t3/overseer/OverseerService") {}
 
 const Handle = Schema.Tuple([Schema.String, Schema.String]);
-const Cursor = Schema.Tuple([Schema.Literal(1), Schema.String, Schema.String, Schema.String]);
+const Cursor = Schema.Tuple([Schema.Literal(2), Schema.String, Schema.String, Schema.String]);
 const decodeHandle = Schema.decodeUnknownOption(Handle);
 const decodeCursor = Schema.decodeUnknownOption(Cursor);
 const opaque = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -66,6 +72,7 @@ const unpack = (value: string): unknown => {
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const store = yield* Store.OverseerStore;
+  const preferences = yield* Preferences.OverseerPreferences;
   const gate = yield* Gate.OverseerGate;
   const launches = yield* Launch.OverseerLaunchService;
   const threads = yield* Threads.ThreadManagementService;
@@ -104,12 +111,12 @@ const make = Effect.gen(function* () {
           | "target_project_id"
         >
       >`
-        SELECT link_id, observer_thread_id, observer_project_id, target_thread_id, target_project_id FROM overseer_links
+        SELECT link_id, observer_thread_id, observer_project_id, target_thread_id, target_project_id, 1 AS direction FROM overseer_links
         WHERE state = 'active' AND observer_thread_id = ${input.threadId} AND link_id > ${after}
         UNION ALL
-        SELECT link_id, observer_thread_id, observer_project_id, target_thread_id, target_project_id FROM overseer_links
-        WHERE state = 'active' AND target_thread_id = ${input.threadId} AND link_id > ${after}
-        ORDER BY link_id LIMIT 21`;
+        SELECT link_id, observer_thread_id, observer_project_id, target_thread_id, target_project_id, 0 AS direction FROM overseer_links
+        WHERE state = 'active' AND target_thread_id = ${input.threadId} AND ${after} = ''
+        ORDER BY direction, link_id LIMIT 21`;
       const links: OversightLink[] = [];
       for (const row of rows.slice(0, 20)) {
         const counterpart =
@@ -171,7 +178,7 @@ const make = Effect.gen(function* () {
       return {
         links,
         ...(rows.length > 20
-          ? { nextCursor: opaque([1, environment, input.threadId, rows[19]!.link_id]) }
+          ? { nextCursor: opaque([2, environment, input.threadId, rows[19]!.link_id]) }
           : {}),
       };
     },
@@ -274,6 +281,25 @@ const make = Effect.gen(function* () {
       };
     }),
     list,
+    configure: Effect.fn("OverseerService.configure")(function* (input) {
+      yield* available;
+      return yield* gate
+        .commit(
+          Effect.gen(function* () {
+            const exists =
+              yield* sql`SELECT 1 FROM orchestration_v2_projection_threads t JOIN projection_projects p ON p.project_id = t.project_id
+          JOIN overseer_mailboxes m ON m.observer_thread_id = t.thread_id
+          WHERE t.thread_id = ${input.threadId} AND t.deleted_at IS NULL AND p.deleted_at IS NULL`;
+            if (!exists.length) return yield* new OversightError({ reason: "not_found" });
+            return yield* preferences.configure(input.threadId, input.preferences);
+          }),
+        )
+        .pipe(
+          Effect.mapError((error) =>
+            error._tag === "OversightError" ? error : new OversightError({ reason: "unavailable" }),
+          ),
+        );
+    }),
     watch: (input) =>
       Stream.unwrap(
         Effect.gen(function* () {
@@ -287,7 +313,10 @@ const make = Effect.gen(function* () {
               ))[0]!;
               const fixed = ["*", `project:${project.project_id}`];
               const subscription = yield* gate.listen([...fixed, ...dependencies(input, result)]);
-              return { result, subscription, fixed };
+              const settings = yield* preferences
+                .get(input.threadId)
+                .pipe(Effect.mapError(() => new OversightError({ reason: "unavailable" })));
+              return { result, subscription, fixed, settings };
             }),
           );
           let emitted = initial.subscription.revision;
@@ -299,13 +328,20 @@ const make = Effect.gen(function* () {
                   const result = yield* list(input);
                   initial.subscription.update([...initial.fixed, ...dependencies(input, result)]);
                   emitted = yield* gate.revision;
-                  return { ...result, revision: emitted };
+                  const settings = yield* preferences
+                    .get(input.threadId)
+                    .pipe(Effect.mapError(() => new OversightError({ reason: "unavailable" })));
+                  return { ...result, preferences: settings, revision: emitted };
                 }),
               ),
             ),
           );
           return Stream.concat(
-            Stream.succeed({ ...initial.result, revision: initial.subscription.revision }),
+            Stream.succeed({
+              ...initial.result,
+              preferences: initial.settings,
+              revision: initial.subscription.revision,
+            }),
             updates,
           ).pipe(Stream.changesWith((a, b) => a.revision === b.revision));
         }),
@@ -313,4 +349,6 @@ const make = Effect.gen(function* () {
     unlink,
   });
 });
-export const layer = Layer.effect(OverseerService, make).pipe(Layer.provide(Gate.layer));
+export const layer = Layer.effect(OverseerService, make).pipe(
+  Layer.provide(Layer.merge(Gate.layer, Preferences.layer)),
+);

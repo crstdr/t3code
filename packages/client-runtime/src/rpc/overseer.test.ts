@@ -45,11 +45,26 @@ it.effect("an old server with no capability is never sent a feature RPC", () =>
     });
     expect(fixture.watches).toBe(0);
     expect(fixture.unlinks).toBe(0);
+    const preferences = {
+      autoWake: false,
+      cadenceEnabled: false,
+      cadenceMinutes: 5 as const,
+      idleEnabled: false,
+      idleMinutes: 30 as const,
+    };
+    expect(
+      yield* Overseer.configure({ threadId: ThreadId.make("thread"), preferences }).pipe(
+        Effect.flip,
+      ),
+    ).toMatchObject({ reason: "unsupported" });
+    expect(fixture.unlinks).toBe(0);
     fixture.supported = true;
     yield* Stream.runDrain(Overseer.watch({ threadId: ThreadId.make("thread") }));
     yield* Overseer.unlink({ linkId: "link" });
     expect(fixture.watches).toBe(1);
     expect(fixture.unlinks).toBe(1);
+    yield* Overseer.configure({ threadId: ThreadId.make("thread"), preferences });
+    expect(fixture.unlinks).toBe(2);
     // The RPC facade is mocked above; accessing this unused supervisor is a test defect.
   }).pipe(Effect.provideService(EnvironmentSupervisor, {} as EnvironmentSupervisor["Service"])),
 );

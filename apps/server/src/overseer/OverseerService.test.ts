@@ -98,6 +98,77 @@ it.effect(
     }).pipe(enabled, Effect.provide(harness())),
 );
 
+it.effect("page one establishes both roles even with 25 outgoing links", () =>
+  Effect.gen(function* () {
+    yield* setup();
+    for (let index = 0; index < 25; index++) yield* reserve(`link:${index}`);
+    const sql = yield* SqlClient.SqlClient;
+    // The link is reserved before target creation in production; this is its final stored shape.
+    yield* sql`INSERT INTO overseer_mailboxes(observer_thread_id) VALUES ('parent')`;
+    yield* sql`INSERT INTO overseer_links (link_id, observer_thread_id, observer_project_id, target_thread_id, target_project_id,
+      client_request_id, fingerprint, launch_command_id, launch_message_id, launch_input_json)
+      VALUES ('zzz-incoming', 'parent', 'project:b', ${observer}, 'project:a', 'incoming', 'incoming', 'incoming', 'incoming', '{}')`;
+    const service = yield* Service.OverseerService;
+    const first = yield* service.list({ threadId: observer });
+    assert.equal(first.links.length, 20);
+    assert.equal(first.links[0]!.targetThreadId, observer);
+    assert.equal(first.links[1]!.observerThreadId, observer);
+    const second = yield* service.list({ threadId: observer, cursor: first.nextCursor! });
+    assert.equal(second.links.length, 6);
+    assert.equal(new Set([...first.links, ...second.links].map((link) => link.linkId)).size, 26);
+    const oldCursor = Buffer.from(
+      JSON.stringify([1, invocation.environmentId, observer, "link:0"]),
+    ).toString("base64url");
+    assert.equal(
+      (yield* service.list({ threadId: observer, cursor: oldCursor }).pipe(Effect.flip)).reason,
+      "invalid_cursor",
+    );
+  }).pipe(enabled, Effect.provide(harness())),
+);
+
+it.effect("preferences watch is read-only and updates round-trip with revision invalidation", () =>
+  Effect.gen(function* () {
+    yield* setup();
+    yield* reserve();
+    const sql = yield* SqlClient.SqlClient;
+    const service = yield* Service.OverseerService;
+    const before = yield* sql`SELECT total_changes() AS changes`;
+    const pull = yield* Stream.toPull(service.watch({ threadId: observer }));
+    const initial = (yield* pull)[0]!;
+    assert.deepEqual(initial.preferences, {
+      autoWake: true,
+      cadenceEnabled: false,
+      cadenceMinutes: 5,
+      idleEnabled: false,
+      idleMinutes: 30,
+    });
+    assert.deepEqual(yield* sql`SELECT total_changes() AS changes`, before);
+    const preferences = {
+      autoWake: false,
+      cadenceEnabled: true,
+      cadenceMinutes: 15 as const,
+      idleEnabled: true,
+      idleMinutes: 120 as const,
+    };
+    assert.deepEqual(yield* service.configure({ threadId: observer, preferences }), preferences);
+    const updated = (yield* pull)[0]!;
+    assert.isAbove(updated.revision, initial.revision);
+    assert.deepEqual(updated.preferences, preferences);
+    assert.equal(
+      (yield* service
+        .configure({ threadId: ThreadId.make("missing"), preferences })
+        .pipe(Effect.flip)).reason,
+      "not_found",
+    );
+    assert.equal(
+      (yield* service
+        .configure({ threadId: observer, preferences })
+        .pipe(Effect.provideService(Feature.Enabled, false), Effect.flip)).reason,
+      "unsupported",
+    );
+  }).pipe(enabled, Effect.provide(harness())),
+);
+
 it.effect("unlink is endpoint isolated and stale-idempotent", () =>
   Effect.gen(function* () {
     yield* setup();

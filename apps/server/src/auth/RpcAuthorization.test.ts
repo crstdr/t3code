@@ -31,7 +31,18 @@ import * as RpcAuthorization from "./RpcAuthorization.ts";
 describe("RPC authorization scopes", () => {
   it.effect("oversight read credentials can watch but cannot unlink", () =>
     Effect.gen(function* () {
-      const tested = [WS_METHODS.oversightWatch, WS_METHODS.oversightUnlink] as const;
+      const tested = [
+        WS_METHODS.oversightWatch,
+        WS_METHODS.oversightUnlink,
+        WS_METHODS.oversightConfigure,
+      ] as const;
+      const preferences = {
+        autoWake: true,
+        cadenceEnabled: false,
+        cadenceMinutes: 5 as const,
+        idleEnabled: false,
+        idleMinutes: 30 as const,
+      };
       const group = WsRpcGroup.omit(
         ...[...WsRpcGroup.requests.keys()].filter(
           (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, (typeof tested)[number]> =>
@@ -43,12 +54,18 @@ describe("RPC authorization scopes", () => {
         Effect.provide(
           Layer.mergeAll(
             group.toLayerHandler(WS_METHODS.oversightWatch, () =>
-              Stream.succeed({ revision: 0, links: [] }),
+              Stream.succeed({ revision: 0, links: [], preferences }),
             ),
             group.toLayerHandler(WS_METHODS.oversightUnlink, (input) =>
               Effect.sync(() => {
                 writes++;
                 return { linkId: input.linkId, closed: true as const };
+              }),
+            ),
+            group.toLayerHandler(WS_METHODS.oversightConfigure, (input) =>
+              Effect.sync(() => {
+                writes++;
+                return input.preferences;
               }),
             ),
             RpcAuthorization.layer([AuthOrchestrationReadScope]),
@@ -59,13 +76,19 @@ describe("RPC authorization scopes", () => {
         yield* Stream.runCollect(
           client[WS_METHODS.oversightWatch]({ threadId: ThreadId.make("thread") }),
         ),
-      ).toEqual([{ revision: 0, links: [] }]);
+      ).toEqual([{ revision: 0, links: [], preferences }]);
       expect(
         yield* client[WS_METHODS.oversightUnlink]({ linkId: "link" }).pipe(Effect.flip),
       ).toMatchObject({
         _tag: "EnvironmentAuthorizationError",
         requiredPermission: AuthOrchestrationOperateScope,
       });
+      expect(
+        yield* client[WS_METHODS.oversightConfigure]({
+          threadId: ThreadId.make("thread"),
+          preferences,
+        }).pipe(Effect.flip),
+      ).toMatchObject({ requiredPermission: AuthOrchestrationOperateScope });
       expect(writes).toBe(0);
     }),
   );

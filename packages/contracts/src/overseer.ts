@@ -28,7 +28,21 @@ export const OversightPage = Schema.Struct({
   nextCursor: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type OversightPage = typeof OversightPage.Type;
+export const OversightPreferences = Schema.Struct({
+  autoWake: Schema.Boolean,
+  cadenceEnabled: Schema.Boolean,
+  cadenceMinutes: Schema.Literals([1, 5, 10, 15, 30, 60, 180]),
+  idleEnabled: Schema.Boolean,
+  idleMinutes: Schema.Literals([10, 30, 60, 120, 360]),
+});
+export type OversightPreferences = typeof OversightPreferences.Type;
+export const OversightConfigureInput = Schema.Struct({
+  threadId: ThreadId,
+  preferences: OversightPreferences,
+});
+export type OversightConfigureInput = typeof OversightConfigureInput.Type;
 export const OversightWatchFrame = Schema.Struct({
+  preferences: OversightPreferences,
   ...OversightPage.fields,
   revision: NonNegativeInt,
 });
