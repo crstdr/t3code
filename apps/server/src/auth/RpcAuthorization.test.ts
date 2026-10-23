@@ -62,10 +62,10 @@ describe("RPC authorization scopes", () => {
                 return { linkId: input.linkId, closed: true as const };
               }),
             ),
-            group.toLayerHandler(WS_METHODS.oversightConfigure, (input) =>
+            group.toLayerHandler(WS_METHODS.oversightConfigure, () =>
               Effect.sync(() => {
                 writes++;
-                return input.preferences;
+                return preferences;
               }),
             ),
             RpcAuthorization.layer([AuthOrchestrationReadScope]),

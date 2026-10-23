@@ -1,5 +1,4 @@
 import { OversightPreferences as Preferences, type ProviderRequestKind } from "@t3tools/contracts";
-export { Preferences };
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -14,7 +13,7 @@ export const approvalKinds = [
 ] as const satisfies ReadonlyArray<ProviderRequestKind>;
 export const isApprovalKind = Schema.is(Schema.Literals(approvalKinds));
 export type OccurrenceKind = "completion" | "question" | "approval";
-export type Preferences = typeof Preferences.Type;
+export { Preferences };
 export const defaults: Preferences = {
   autoWake: true,
   cadenceEnabled: false,

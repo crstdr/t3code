@@ -3,13 +3,13 @@ import { vi } from "vite-plus/test";
 import * as Effect from "effect/Effect";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import * as Stream from "effect/Stream";
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId, WS_METHODS, type OversightConfigureInput } from "@t3tools/contracts";
 import * as Overseer from "./overseer.ts";
 
 const fixture = vi.hoisted(() => ({
   supported: undefined as boolean | undefined,
-  watches: 0,
-  unlinks: 0,
+  watches: [] as Array<{ tag: string; input: unknown }>,
+  writes: [] as Array<{ tag: string; input: unknown }>,
 }));
 vi.mock("./client.ts", () => ({
   getInitialServerConfig: () =>
@@ -18,53 +18,47 @@ vi.mock("./client.ts", () => ({
         capabilities: fixture.supported === undefined ? {} : { threadOversight: fixture.supported },
       },
     })),
-  subscribe: () => {
-    fixture.watches++;
+  subscribe: (tag: string, input: unknown) => {
+    fixture.watches.push({ tag, input });
     return Stream.empty;
   },
-  requestGuarded: () =>
+  requestGuarded: (tag: string, input: OversightConfigureInput) =>
     Effect.sync(() => {
-      fixture.unlinks++;
-      return { linkId: "link", closed: true };
+      fixture.writes.push({ tag, input });
+      return tag === WS_METHODS.oversightConfigure
+        ? input.preferences
+        : { linkId: "link", closed: true };
     }),
 }));
 
-it.effect("an old server with no capability is never sent a feature RPC", () =>
-  Effect.gen(function* () {
-    fixture.supported = undefined;
-    fixture.watches = 0;
-    fixture.unlinks = 0;
-    expect(
-      yield* Stream.runDrain(Overseer.watch({ threadId: ThreadId.make("thread") })).pipe(
-        Effect.flip,
-      ),
-    ).toMatchObject({ _tag: "OversightError", reason: "unsupported" });
-    expect(yield* Overseer.unlink({ linkId: "link" }).pipe(Effect.flip)).toMatchObject({
-      _tag: "OversightError",
-      reason: "unsupported",
-    });
-    expect(fixture.watches).toBe(0);
-    expect(fixture.unlinks).toBe(0);
-    const preferences = {
-      autoWake: false,
-      cadenceEnabled: false,
-      cadenceMinutes: 5 as const,
-      idleEnabled: false,
-      idleMinutes: 30 as const,
-    };
-    expect(
-      yield* Overseer.configure({ threadId: ThreadId.make("thread"), preferences }).pipe(
-        Effect.flip,
-      ),
-    ).toMatchObject({ reason: "unsupported" });
-    expect(fixture.unlinks).toBe(0);
-    fixture.supported = true;
-    yield* Stream.runDrain(Overseer.watch({ threadId: ThreadId.make("thread") }));
-    yield* Overseer.unlink({ linkId: "link" });
-    expect(fixture.watches).toBe(1);
-    expect(fixture.unlinks).toBe(1);
-    yield* Overseer.configure({ threadId: ThreadId.make("thread"), preferences });
-    expect(fixture.unlinks).toBe(2);
-    // The RPC facade is mocked above; accessing this unused supervisor is a test defect.
-  }).pipe(Effect.provideService(EnvironmentSupervisor, {} as EnvironmentSupervisor["Service"])),
+it.effect(
+  "an old server gets zero feature RPCs; supported servers get the exact tags and payloads",
+  () =>
+    Effect.gen(function* () {
+      fixture.supported = undefined;
+      fixture.watches = [];
+      fixture.writes = [];
+      const threadId = ThreadId.make("thread");
+      const preferences = { idleEnabled: false };
+      expect(yield* Stream.runDrain(Overseer.watch({ threadId })).pipe(Effect.flip)).toMatchObject({
+        reason: "unsupported",
+      });
+      expect(yield* Overseer.unlink({ linkId: "link" }).pipe(Effect.flip)).toMatchObject({
+        reason: "unsupported",
+      });
+      expect(yield* Overseer.configure({ threadId, preferences }).pipe(Effect.flip)).toMatchObject({
+        reason: "unsupported",
+      });
+      expect(fixture.watches).toEqual([]);
+      expect(fixture.writes).toEqual([]);
+      fixture.supported = true;
+      yield* Stream.runDrain(Overseer.watch({ threadId }));
+      yield* Overseer.unlink({ linkId: "link" });
+      yield* Overseer.configure({ threadId, preferences });
+      expect(fixture.watches).toEqual([{ tag: WS_METHODS.oversightWatch, input: { threadId } }]);
+      expect(fixture.writes).toEqual([
+        { tag: WS_METHODS.oversightUnlink, input: { linkId: "link" } },
+        { tag: WS_METHODS.oversightConfigure, input: { threadId, preferences } },
+      ]);
+    }).pipe(Effect.provideService(EnvironmentSupervisor, {} as EnvironmentSupervisor["Service"])),
 );

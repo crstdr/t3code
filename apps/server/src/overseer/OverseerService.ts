@@ -111,10 +111,13 @@ const make = Effect.gen(function* () {
           | "target_project_id"
         >
       >`
-        SELECT link_id, observer_thread_id, observer_project_id, target_thread_id, target_project_id, 1 AS direction FROM overseer_links
-        WHERE state = 'active' AND observer_thread_id = ${input.threadId} AND link_id > ${after}
+        SELECT link_id, observer_thread_id, observer_project_id, target_thread_id, target_project_id, 1 AS direction FROM (
+          SELECT link_id, observer_thread_id, observer_project_id, target_thread_id, target_project_id FROM overseer_links l
+          WHERE state = 'active' AND observer_thread_id = ${input.threadId} AND link_id > ${after}
+          ORDER BY link_id LIMIT 21
+        )
         UNION ALL
-        SELECT link_id, observer_thread_id, observer_project_id, target_thread_id, target_project_id, 0 AS direction FROM overseer_links
+        SELECT link_id, observer_thread_id, observer_project_id, target_thread_id, target_project_id, 0 AS direction FROM overseer_links l
         WHERE state = 'active' AND target_thread_id = ${input.threadId} AND ${after} = ''
         ORDER BY direction, link_id LIMIT 21`;
       const links: OversightLink[] = [];
@@ -194,6 +197,14 @@ const make = Effect.gen(function* () {
           error._tag === "OversightError" ? error : new OversightError({ reason: "unavailable" }),
         ),
       ),
+  );
+  const watchPreferences = Effect.fn("OverseerService.watchPreferences")(
+    function* (observer: ThreadId) {
+      const exists =
+        yield* sql`SELECT 1 FROM overseer_mailboxes WHERE observer_thread_id = ${observer}`;
+      return exists.length ? { preferences: yield* preferences.get(observer) } : {};
+    },
+    Effect.mapError(() => new OversightError({ reason: "unavailable" })),
   );
   const dependencies = (input: OversightWatchInput, result: OversightPage) => [
     input.threadId,
@@ -291,7 +302,11 @@ const make = Effect.gen(function* () {
           JOIN overseer_mailboxes m ON m.observer_thread_id = t.thread_id
           WHERE t.thread_id = ${input.threadId} AND t.deleted_at IS NULL AND p.deleted_at IS NULL`;
             if (!exists.length) return yield* new OversightError({ reason: "not_found" });
-            return yield* preferences.configure(input.threadId, input.preferences);
+            const previous = yield* preferences.get(input.threadId);
+            return yield* preferences.configure(input.threadId, {
+              ...previous,
+              ...input.preferences,
+            });
           }),
         )
         .pipe(
@@ -313,9 +328,7 @@ const make = Effect.gen(function* () {
               ))[0]!;
               const fixed = ["*", `project:${project.project_id}`];
               const subscription = yield* gate.listen([...fixed, ...dependencies(input, result)]);
-              const settings = yield* preferences
-                .get(input.threadId)
-                .pipe(Effect.mapError(() => new OversightError({ reason: "unavailable" })));
+              const settings = yield* watchPreferences(input.threadId);
               return { result, subscription, fixed, settings };
             }),
           );
@@ -328,10 +341,8 @@ const make = Effect.gen(function* () {
                   const result = yield* list(input);
                   initial.subscription.update([...initial.fixed, ...dependencies(input, result)]);
                   emitted = yield* gate.revision;
-                  const settings = yield* preferences
-                    .get(input.threadId)
-                    .pipe(Effect.mapError(() => new OversightError({ reason: "unavailable" })));
-                  return { ...result, preferences: settings, revision: emitted };
+                  const settings = yield* watchPreferences(input.threadId);
+                  return { ...result, ...settings, revision: emitted };
                 }),
               ),
             ),
@@ -339,7 +350,7 @@ const make = Effect.gen(function* () {
           return Stream.concat(
             Stream.succeed({
               ...initial.result,
-              preferences: initial.settings,
+              ...initial.settings,
               revision: initial.subscription.revision,
             }),
             updates,

@@ -94,6 +94,8 @@ it("round-trips the isolated public contracts without requiring capability on ol
     [OversightWatchFrame, frame],
     [OversightWatchInput, { threadId: "observer" }],
     [OversightConfigureInput, { threadId: "observer", preferences: frame.preferences }],
+    [OversightConfigureInput, { threadId: "observer", preferences: { idleEnabled: false } }],
+    [OversightWatchFrame, { revision: 0, links: [] }],
     [OversightUnlinkInput, { linkId: "opaque" }],
     [OversightUnlinkResult, { linkId: "opaque", closed: true }],
   ] as const) {
