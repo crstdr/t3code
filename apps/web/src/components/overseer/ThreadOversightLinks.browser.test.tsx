@@ -395,6 +395,9 @@ it("keeps idle controls reachable after the last unlink and captures the shared 
   document.documentElement.classList.remove("dark");
   await userEvent.click(screen.getByRole("button", { name: "Show oversight links" }));
   await expect.element(page.getByRole("dialog", { name: "Oversight links" })).toBeVisible();
+  await expect
+    .element(page.getByRole("dialog", { name: "Oversight links" }))
+    .toHaveStyle({ opacity: "1" });
   await page.screenshot({ path: "__screenshots__/slice5-panel-light.png" });
   document.documentElement.classList.add("dark");
   await page.screenshot({ path: "__screenshots__/slice5-panel-dark.png" });
