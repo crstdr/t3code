@@ -113,6 +113,7 @@ import {
   usePrimaryEnvironmentId,
 } from "../state/environments";
 import { useProjects, useServerConfigs, useThreadShells, waitForProject } from "../state/entities";
+import { oversightPaletteItem } from "./overseer/paletteItem";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
   appendBrowsePathSegment,
@@ -1184,6 +1185,11 @@ function OpenCommandPaletteDialog(props: {
   };
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
+  const oversightItem = oversightPaletteItem(
+    activeThread === null ? null : scopeThreadRef(activeThread.environmentId, activeThread.id),
+    activeThreadServerConfig?.environment.capabilities,
+  );
+  if (oversightItem !== null) actionItems.push(oversightItem);
 
   if (projects.length > 0) {
     const activeProjectTitle =

@@ -5,6 +5,10 @@ import {
   WS_METHODS,
   type ServerConfig,
   type OversightWatchFrame,
+  type OversightWatchInput,
+  type OversightUnlinkInput,
+  type OversightConfigureInput,
+  type OversightPreferences,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -24,6 +28,13 @@ import { RpcPermissionGuard, getInitialServerConfig } from "./client.ts";
 import * as Overseer from "./overseer.ts";
 
 const PAGE: OversightWatchFrame = { revision: 1, links: [] };
+const PREFERENCES: OversightPreferences = {
+  autoWake: true,
+  cadenceEnabled: false,
+  cadenceMinutes: 5,
+  idleEnabled: false,
+  idleMinutes: 30,
+};
 
 const makeHarness = Effect.fn("TestOverseer.makeHarness")(function* () {
   const activeSession = yield* SubscriptionRef.make<Option.Option<RpcSession>>(Option.none());
@@ -31,16 +42,25 @@ const makeHarness = Effect.fn("TestOverseer.makeHarness")(function* () {
   const prepared = yield* SubscriptionRef.make<Option.Option<PreparedConnection>>(Option.none());
   const configReady = yield* Deferred.make<ServerConfig>();
   const calls: string[] = [];
+  const requests: Array<{ readonly tag: string; readonly input: unknown }> = [];
   const configSubscribed = yield* Deferred.make<void>();
   const client = {
-    [WS_METHODS.oversightWatch]: () => {
+    [WS_METHODS.oversightWatch]: (input: OversightWatchInput) => {
       calls.push("watch");
+      requests.push({ tag: WS_METHODS.oversightWatch, input });
       return Stream.make(PAGE);
     },
-    [WS_METHODS.oversightUnlink]: () =>
+    [WS_METHODS.oversightUnlink]: (input: OversightUnlinkInput) =>
       Effect.sync(() => {
         calls.push("unlink");
+        requests.push({ tag: WS_METHODS.oversightUnlink, input });
         return { linkId: "link", closed: true };
+      }),
+    [WS_METHODS.oversightConfigure]: (input: OversightConfigureInput) =>
+      Effect.sync(() => {
+        calls.push("configure");
+        requests.push({ tag: WS_METHODS.oversightConfigure, input });
+        return { ...PREFERENCES, ...input.preferences };
       }),
   } as unknown as WsRpcProtocolClient;
   const session: RpcSession = {
@@ -86,7 +106,7 @@ const makeHarness = Effect.fn("TestOverseer.makeHarness")(function* () {
     });
   const connect = (capability: boolean | undefined) =>
     ready(capability).pipe(Effect.andThen(publishSession));
-  return { supervisor, calls, connect, publishSession, ready, configSubscribed };
+  return { supervisor, calls, requests, connect, publishSession, ready, configSubscribed };
 });
 
 it.effect("establishes watch after cold-load session readiness without a manual retry", () =>
@@ -161,6 +181,15 @@ it.effect("an old server with no capability is never sent a feature RPC", () =>
         _tag: "OversightError",
         reason: "unsupported",
       });
+      expect(
+        yield* Overseer.configure({
+          threadId: ThreadId.make("thread"),
+          preferences: { idleEnabled: false },
+        }).pipe(Effect.flip),
+      ).toMatchObject({
+        _tag: "OversightError",
+        reason: "unsupported",
+      });
       expect(calls).toEqual([]);
     }).pipe(Effect.provideService(EnvironmentSupervisor, supervisor));
   }),
@@ -181,5 +210,68 @@ it.effect("waits for session readiness before guarded unlink", () =>
       Effect.provideService(EnvironmentSupervisor, supervisor),
       Effect.provideService(RpcPermissionGuard, { authorize: () => Effect.void }),
     );
+  }),
+);
+
+it.effect("supported servers get the exact feature tags and payloads after readiness", () =>
+  Effect.gen(function* () {
+    const { supervisor, requests, connect } = yield* makeHarness();
+    yield* connect(true);
+    const threadId = ThreadId.make("thread");
+    const preferences = { idleEnabled: false };
+    yield* Effect.gen(function* () {
+      yield* Overseer.watch({ threadId }).pipe(Stream.take(1), Stream.runDrain);
+      yield* Overseer.unlink({ linkId: "link" });
+      expect(yield* Overseer.configure({ threadId, preferences })).toEqual(PREFERENCES);
+      expect(requests).toEqual([
+        { tag: WS_METHODS.oversightWatch, input: { threadId } },
+        { tag: WS_METHODS.oversightUnlink, input: { linkId: "link" } },
+        { tag: WS_METHODS.oversightConfigure, input: { threadId, preferences } },
+      ]);
+    }).pipe(
+      Effect.provideService(EnvironmentSupervisor, supervisor),
+      Effect.provideService(RpcPermissionGuard, { authorize: () => Effect.void }),
+    );
+  }),
+);
+
+it.effect("configure waits for the session and its first config snapshot", () =>
+  Effect.gen(function* () {
+    const { supervisor, calls, publishSession, ready, configSubscribed } = yield* makeHarness();
+    yield* Effect.gen(function* () {
+      const configuring = yield* Overseer.configure({
+        threadId: ThreadId.make("thread"),
+        preferences: { idleEnabled: true },
+      }).pipe(Effect.forkChild({ startImmediately: true }));
+      expect(calls).toEqual([]);
+      yield* publishSession;
+      yield* Deferred.await(configSubscribed);
+      expect(calls).toEqual([]);
+      yield* ready(true);
+      expect(yield* Fiber.join(configuring)).toEqual({ ...PREFERENCES, idleEnabled: true });
+      expect(calls).toEqual(["configure"]);
+    }).pipe(
+      Effect.provideService(EnvironmentSupervisor, supervisor),
+      Effect.provideService(RpcPermissionGuard, { authorize: () => Effect.void }),
+    );
+  }),
+);
+
+it.effect("still refuses an unguarded configure after waiting for session readiness", () =>
+  Effect.gen(function* () {
+    const { supervisor, calls, connect } = yield* makeHarness();
+    yield* Effect.gen(function* () {
+      const configuring = yield* Overseer.configure({
+        threadId: ThreadId.make("thread"),
+        preferences: { idleEnabled: true },
+      }).pipe(Effect.flip, Effect.forkChild({ startImmediately: true }));
+      expect(calls).toEqual([]);
+      yield* connect(true);
+      expect(yield* Fiber.join(configuring)).toMatchObject({
+        _tag: "EnvironmentAuthorizationError",
+        requiredScope: "orchestration:operate",
+      });
+      expect(calls).toEqual([]);
+    }).pipe(Effect.provideService(EnvironmentSupervisor, supervisor));
   }),
 );

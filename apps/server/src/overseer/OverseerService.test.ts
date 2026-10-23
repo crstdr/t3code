@@ -98,6 +98,178 @@ it.effect(
     }).pipe(enabled, Effect.provide(harness())),
 );
 
+it.effect("page one establishes both roles even with 25 outgoing links", () =>
+  Effect.gen(function* () {
+    yield* setup();
+    for (let index = 0; index < 25; index++) yield* reserve(`link:${index}`);
+    const sql = yield* SqlClient.SqlClient;
+    // The link is reserved before target creation in production; this is its final stored shape.
+    yield* sql`INSERT INTO overseer_mailboxes(observer_thread_id) VALUES ('parent')`;
+    yield* sql`INSERT INTO overseer_links (link_id, observer_thread_id, observer_project_id, target_thread_id, target_project_id,
+      client_request_id, fingerprint, launch_command_id, launch_message_id, launch_input_json)
+      VALUES ('zzz-incoming', 'parent', 'project:b', ${observer}, 'project:a', 'incoming', 'incoming', 'incoming', 'incoming', '{}')`;
+    const service = yield* Service.OverseerService;
+    const queries: Array<readonly [string, ReadonlyArray<unknown>]> = [];
+    const capture: Statement.Transformer = (statement) => {
+      if (statement.compile()[0].includes("UNION ALL")) queries.push(statement.compile());
+      return Effect.succeed(statement);
+    };
+    const first = yield* service
+      .list({ threadId: observer })
+      .pipe(Effect.provideService(Statement.CurrentTransformer, capture));
+    assert.equal(first.links.length, 20);
+    assert.equal(first.links[0]!.targetThreadId, observer);
+    assert.equal(first.links[1]!.observerThreadId, observer);
+    const second = yield* service
+      .list({ threadId: observer, cursor: first.nextCursor! })
+      .pipe(Effect.provideService(Statement.CurrentTransformer, capture));
+    assert.equal(queries.length, 2);
+    for (const [query, parameters] of queries) {
+      const plan = yield* sql.unsafe<{ readonly detail: string }>(
+        `EXPLAIN QUERY PLAN ${query}`,
+        parameters,
+      );
+      const detail = plan.map((row) => row.detail).join("\n");
+      assert.notMatch(detail, /SCAN (?:l|overseer_links)(?:\n|$)/);
+      assert.equal((detail.match(/SEARCH l USING/g) ?? []).length, 2);
+      assert.include(query, "ORDER BY link_id LIMIT 21");
+    }
+    assert.equal(second.links.length, 6);
+    assert.equal(new Set([...first.links, ...second.links].map((link) => link.linkId)).size, 26);
+    const oldCursor = Buffer.from(
+      JSON.stringify([1, invocation.environmentId, observer, "link:0"]),
+    ).toString("base64url");
+    assert.equal(
+      (yield* service.list({ threadId: observer, cursor: oldCursor }).pipe(Effect.flip)).reason,
+      "invalid_cursor",
+    );
+  }).pipe(enabled, Effect.provide(harness())),
+);
+
+it.effect("preferences watch is read-only and updates round-trip with revision invalidation", () =>
+  Effect.gen(function* () {
+    yield* setup();
+    yield* reserve();
+    const sql = yield* SqlClient.SqlClient;
+    const service = yield* Service.OverseerService;
+    const before = yield* sql`SELECT total_changes() AS changes`;
+    const pull = yield* Stream.toPull(service.watch({ threadId: observer }));
+    const initial = (yield* pull)[0]!;
+    assert.deepEqual(initial.preferences, {
+      autoWake: true,
+      cadenceEnabled: false,
+      cadenceMinutes: 5,
+      idleEnabled: false,
+      idleMinutes: 30,
+    });
+    assert.deepEqual(yield* sql`SELECT total_changes() AS changes`, before);
+    const preferences = {
+      autoWake: false,
+      cadenceEnabled: true,
+      cadenceMinutes: 15 as const,
+      idleEnabled: true,
+      idleMinutes: 120 as const,
+    };
+    assert.deepEqual(yield* service.configure({ threadId: observer, preferences }), preferences);
+    const updated = (yield* pull)[0]!;
+    assert.isAbove(updated.revision, initial.revision);
+    assert.deepEqual(updated.preferences, preferences);
+    yield* Effect.all(
+      [
+        service.configure({ threadId: observer, preferences: { cadenceMinutes: 30 } }),
+        service.configure({ threadId: observer, preferences: { idleMinutes: 360 } }),
+      ],
+      { concurrency: "unbounded" },
+    );
+    const patched = (yield* pull)[0]!;
+    assert.deepEqual(patched.preferences, { ...preferences, cadenceMinutes: 30, idleMinutes: 360 });
+    assert.equal(
+      (yield* service
+        .configure({ threadId: ThreadId.make("missing"), preferences })
+        .pipe(Effect.flip)).reason,
+      "not_found",
+    );
+    assert.equal(
+      (yield* service
+        .configure({ threadId: observer, preferences })
+        .pipe(Effect.provideService(Feature.Enabled, false), Effect.flip)).reason,
+      "unsupported",
+    );
+  }).pipe(enabled, Effect.provide(harness())),
+);
+
+it.effect("configure holds the gate before reads and merges queued disjoint changes", () =>
+  Effect.gen(function* () {
+    yield* setup();
+    yield* reserve();
+    const service = yield* Service.OverseerService;
+    const gate = yield* Gate.OverseerGate;
+    const held = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const holder = yield* gate
+      .commit(Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release))))
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(held);
+    let reads = 0;
+    const capture: Statement.Transformer = (statement) => {
+      reads++;
+      return Effect.succeed(statement);
+    };
+    const first = yield* service
+      .configure({ threadId: observer, preferences: { cadenceMinutes: 30 } })
+      .pipe(
+        Effect.provideService(Statement.CurrentTransformer, capture),
+        Effect.forkChild({ startImmediately: true }),
+      );
+    const second = yield* service
+      .configure({ threadId: observer, preferences: { idleMinutes: 360 } })
+      .pipe(
+        Effect.provideService(Statement.CurrentTransformer, capture),
+        Effect.forkChild({ startImmediately: true }),
+      );
+    assert.equal(reads, 0, "neither call may read before acquiring the gate");
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(holder);
+    yield* Fiber.join(first);
+    yield* Fiber.join(second);
+    assert.isAbove(reads, 0);
+    const pull = yield* Stream.toPull(service.watch({ threadId: observer }));
+    assert.deepEqual((yield* pull)[0]!.preferences, {
+      autoWake: true,
+      cadenceEnabled: false,
+      cadenceMinutes: 30,
+      idleEnabled: false,
+      idleMinutes: 360,
+    });
+  }).pipe(enabled, Effect.provide(harness())),
+);
+
+it.effect(
+  "wake controls are absent without a mailbox and remain configurable after the last unlink",
+  () =>
+    Effect.gen(function* () {
+      yield* setup();
+      const service = yield* Service.OverseerService;
+      const before = yield* Stream.toPull(service.watch({ threadId: observer }));
+      assert.isUndefined((yield* before)[0]!.preferences);
+      yield* reserve();
+      const linked = (yield* before)[0]!;
+      assert.isDefined(linked.preferences);
+      yield* service.configure({ threadId: observer, preferences: { idleEnabled: true } });
+      assert.isTrue((yield* before)[0]!.preferences!.idleEnabled);
+      yield* service.unlink({ linkId: linked.links[0]!.linkId });
+      const empty = (yield* before)[0]!;
+      assert.isEmpty(empty.links);
+      assert.isDefined(empty.preferences);
+      const settings = { ...empty.preferences!, idleEnabled: false };
+      assert.deepEqual(
+        yield* service.configure({ threadId: observer, preferences: settings }),
+        settings,
+      );
+      assert.isFalse((yield* before)[0]!.preferences!.idleEnabled);
+    }).pipe(enabled, Effect.provide(harness())),
+);
+
 it.effect("unlink is endpoint isolated and stale-idempotent", () =>
   Effect.gen(function* () {
     yield* setup();
@@ -265,10 +437,18 @@ it.effect("MCP list cannot select an endpoint and read-only credentials cannot u
     assert.deepEqual(incoming, {
       links: [{ ...(yield* service.list({ threadId: launched.projection.thread.id })).links[0]! }],
     });
+    const sql = yield* SqlClient.SqlClient;
+    const workerRuns =
+      yield* sql`SELECT * FROM orchestration_v2_projection_runs WHERE thread_id = ${launched.projection.thread.id}`;
+    assert.isNotEmpty(workerRuns);
     const unlinked = yield* service
       .link({ op: "unlink", linkId })
       .pipe(Effect.provideService(McpInvocation.McpInvocationContext, endpoint));
     assert.deepEqual(unlinked, { linkId, closed: true });
+    assert.deepEqual(
+      yield* sql`SELECT * FROM orchestration_v2_projection_runs WHERE thread_id = ${launched.projection.thread.id}`,
+      workerRuns,
+    );
     assert.equal(
       (yield* (yield* SqlClient.SqlClient)`SELECT 1 FROM orchestration_v2_projection_threads WHERE thread_id = ${launched.projection.thread.id}`)
         .length,

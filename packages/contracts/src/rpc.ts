@@ -27,6 +27,8 @@ import {
   OversightUnlinkInput,
   OversightUnlinkResult,
   OversightError,
+  OversightConfigureInput,
+  OversightPreferences,
 } from "./overseer.ts";
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/rpc/Rpc";
@@ -387,6 +389,7 @@ import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 export const WS_METHODS = {
   oversightWatch: "oversight.watch",
   oversightUnlink: "oversight.unlink",
+  oversightConfigure: "oversight.configure",
   projectsList: "projects.list",
   projectsAdd: "projects.add",
   projectsRemove: "projects.remove",
@@ -1894,6 +1897,11 @@ const WsOversightWatchRpc = Rpc.make(WS_METHODS.oversightWatch, {
   stream: true,
   error: Schema.Union([OversightError, EnvironmentAuthorizationError]),
 });
+const WsOversightConfigureRpc = Rpc.make(WS_METHODS.oversightConfigure, {
+  payload: OversightConfigureInput,
+  success: OversightPreferences,
+  error: Schema.Union([OversightError, EnvironmentAuthorizationError]),
+});
 const WsOversightUnlinkRpc = Rpc.make(WS_METHODS.oversightUnlink, {
   payload: OversightUnlinkInput,
   success: OversightUnlinkResult,
@@ -1903,6 +1911,7 @@ const WsOversightUnlinkRpc = Rpc.make(WS_METHODS.oversightUnlink, {
 export const WsRpcGroup = RpcGroup.make(
   WsOversightWatchRpc,
   WsOversightUnlinkRpc,
+  WsOversightConfigureRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,

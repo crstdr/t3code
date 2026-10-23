@@ -252,6 +252,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --color-placeholder: var(--contrast-placeholder);
   --color-secondary-label: var(--contrast-secondary-label);
   --color-icon-muted: var(--contrast-icon-muted);
+  --color-oversight-overseer-light: #c26a00;
+  --color-oversight-overseer-dark: #ffb340;
   --color-secondary-foreground: var(--contrast-secondary-foreground);
   --color-secondary: var(--secondary);
   --color-primary-foreground: var(--primary-foreground);

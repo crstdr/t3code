@@ -1,0 +1,12 @@
+Overseer and worker role vectors
+
+Adapted from AgentOversightRoleIcon.swift by Fb/baron, RepoPrompt CE PR #1330.
+Source: https://github.com/repoprompt/repoprompt-ce/blob/f0fab66c5f842b3677eb5aa3e53c41f3e79c1b5d/Sources/RepoPrompt/Features/AgentMode/Views/Components/AgentOversightRoleIcon.swift
+Upstream commit: f0fab66c5f842b3677eb5aa3e53c41f3e79c1b5d
+
+Original RepoPrompt CE code is released under the Apache License, Version 2.0.
+The unmodified upstream license is included in LICENSE.
+
+Modifications for T3 Code: converted the 24-point SwiftUI Canvas geometry to SVG;
+use CSS light/dark amber and gray role colors. The worker parent/link remains a
+single half-opacity group. No runtime or prompt code was imported.
