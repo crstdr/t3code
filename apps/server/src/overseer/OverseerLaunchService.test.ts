@@ -34,6 +34,7 @@ import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Receipts from "../orchestration-v2/CommandReceiptStore.ts";
 import * as Replay from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import * as Recovery from "../orchestration-v2/ProviderRuntimeRecoveryService.ts";
+import * as Settings from "../serverSettings.ts";
 import * as Projections from "../orchestration-v2/ProjectionStore.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Store from "./OverseerStore.ts";
@@ -54,6 +55,23 @@ const decodeLaunch = Schema.decodeUnknownEffect(LaunchParameters, {
   onExcessProperty:
     Tool.getStrictMode(ProjectToolkit.tools.t3_thread_launch) === true ? "error" : "ignore",
 });
+
+const assertNoLaunchSideEffects = Effect.fn("test.overseer.assertNoLaunchSideEffects")(
+  function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const [state] = yield* sql<{
+      links: number;
+      threads: number;
+      runs: number;
+      messages: number;
+    }>`SELECT
+    (SELECT COUNT(*) FROM overseer_links) AS links,
+    (SELECT COUNT(*) FROM orchestration_v2_projection_threads WHERE thread_id <> ${observer}) AS threads,
+    (SELECT COUNT(*) FROM orchestration_v2_projection_runs WHERE thread_id <> ${observer}) AS runs,
+    (SELECT COUNT(*) FROM orchestration_v2_projection_messages WHERE thread_id <> ${observer}) AS messages`;
+    assert.deepEqual(state, { links: 0, threads: 0, runs: 0, messages: 0 });
+  },
+);
 
 it.effect(
   "reserves before core creation and returns identical receipts across concurrent retries",
@@ -93,15 +111,7 @@ it.effect(
         const error = yield* enabled(saga.launch(request)).pipe(Effect.flip);
         assert.equal(error.message, new Saga.OverseerLaunchError({ reason: "E1" }).message);
         assert.equal(yield* Ref.get(reads), 3);
-        assert.deepEqual(yield* (yield* Store.OverseerStore).incompleteLaunches(), []);
-        const sql = yield* SqlClient.SqlClient;
-        assert.equal(
-          (yield* sql<{
-            count: number;
-          }>`SELECT COUNT(*) AS count FROM projection_threads WHERE thread_id <> ${observer}`)[0]
-            ?.count,
-          0,
-        );
+        yield* assertNoLaunchSideEffects();
       }).pipe(
         Effect.provide(
           harness({
@@ -182,6 +192,88 @@ it.effect(
       });
       assert.deepEqual(yield* (yield* Store.OverseerStore).incompleteLaunches(), []);
     }).pipe(Effect.provide(harness())),
+);
+
+it.effect.each(["entry", "locked"] as const)("rejects a subagent caller at %s", (stage) =>
+  Effect.gen(function* () {
+    const reads = yield* Ref.make(0);
+    yield* Effect.gen(function* () {
+      const saga = yield* setup();
+      yield* Ref.set(reads, 0);
+      const error = yield* enabled(saga.launch(request)).pipe(Effect.flip);
+      assert.instanceOf(error, Saga.OverseerLaunchError);
+      assert.equal(error._tag, "OverseerLaunchError");
+      if (error._tag === "OverseerLaunchError") assert.equal(error.reason, "E1");
+      assert.equal(yield* Ref.get(reads), stage === "entry" ? 2 : 3);
+      yield* assertNoLaunchSideEffects();
+    }).pipe(
+      Effect.provide(
+        harness({
+          readObserverShell: (shell) =>
+            Ref.updateAndGet(reads, (n) => n + 1).pipe(
+              Effect.map((read) =>
+                stage === "locked" && read < 3
+                  ? shell
+                  : {
+                      ...shell,
+                      lineage: {
+                        parentThreadId: ThreadId.make("parent"),
+                        relationshipToParent: "subagent" as const,
+                        rootThreadId: ThreadId.make("parent"),
+                      },
+                    },
+              ),
+            ),
+        }),
+      ),
+    );
+  }),
+);
+
+it.effect("rejects a project-disabled target provider instance before reserving", () =>
+  Effect.gen(function* () {
+    const saga = yield* setup();
+    const threads = yield* Threads.ThreadManagementService;
+    const caller = yield* threads.getThreadShell(observer);
+    assert.isNotNull(caller);
+    const projectId = caller!.projectId;
+    const instanceId = ProviderInstanceId.make("claudeAgent");
+    yield* (yield* Settings.ServerSettingsService).updateSettings({
+      projectSettingsOverrides: {
+        [projectId]: { providerInstances: { [instanceId]: { enabled: false } } },
+      },
+    });
+    const error = yield* enabled(
+      saga.launch({ ...request, modelSelection: { instanceId, model: "test-model" } }),
+    ).pipe(Effect.flip);
+    assert.equal(error._tag, "OrchestratorMcpFailure");
+    if (error._tag === "OrchestratorMcpFailure") assert.equal(error.code, "invalid_request");
+    assert.equal(
+      error.message,
+      new Threads.ThreadManagementProviderInstanceDisabledError({ projectId, instanceId }).message,
+    );
+    yield* assertNoLaunchSideEffects();
+  }).pipe(Effect.provide(harness())),
+);
+
+it.effect("rejects initial interaction-mode escalation before reserving", () =>
+  Effect.gen(function* () {
+    const saga = yield* setup();
+    const threads = yield* Threads.ThreadManagementService;
+    yield* threads.dispatch({
+      type: "thread.interaction-mode.set",
+      commandId: CommandId.make("owner:plan"),
+      threadId: observer,
+      interactionMode: "plan",
+    });
+    const error = yield* enabled(saga.launch({ ...request, interactionMode: "default" })).pipe(
+      Effect.flip,
+    );
+    assert.equal(error._tag, "OrchestratorMcpFailure");
+    if (error._tag === "OrchestratorMcpFailure")
+      assert.equal(error.code, "interaction_mode_escalation_denied");
+    yield* assertNoLaunchSideEffects();
+  }).pipe(Effect.provide(harness())),
 );
 
 it.effect(

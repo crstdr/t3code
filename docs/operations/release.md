@@ -9,6 +9,73 @@ remain stable and nightly. To ship 0.1.0 Beta, use `channel=stable` and
 `version=0.1.0`. Removing the Beta label later is a branding change independent of
 the version.
 
+## Experimental fork oversight
+
+For the integrated overseer v1 at `76e1713477` (status 2026-10-24):
+
+- The web/desktop panel is accepted as v1. Final approved agent-facing wording is
+  in [OverseerText.ts](../../apps/server/src/overseer/OverseerText.ts), integrated
+  at this base after wording edits in `01b894e85a`; old plan drafts are not the
+  text authority. These docs add no agent-facing text. Panel/text acceptance and
+  documented behavior are **not human security approval**. Security acceptance
+  still gates merges; fork PRs 1–6 remain drafts.
+- Existing slice 6a and 6b-1 passes on earlier slice/integration commits recorded
+  feature-off MCP catalog, RPC surface and descriptor equality against pinned
+  upstream, plus encoded fixtures checked by frozen official v0.1.2 codecs. See the [compatibility tests](../../apps/server/src/overseer/OverseerCompatibility.test.ts),
+  [catalog tests](../../apps/server/src/overseer/OverseerText.test.ts),
+  [descriptor test](../../apps/server/src/environment/ServerEnvironment.test.ts)
+  and [codec tests](../../packages/contracts/src/overseer.test.ts).
+  The original `860e6d2cc6` decoder, database downgrade and installed-client
+  compatibility remain gaps; codec checks do not certify those paths.
+- Live completion delivery and native acceptance receipts passed for Codex and
+  Claude in isolated disposable homes. The 6b-1 pass also exercised the real web
+  panel, preference persistence, navigation and unlink. Subsequent real
+  Opus5.5High/SolHigh separate-worktree completions were reported repeatedly by
+  Triton on 2026-10-24. These are scoped observations, not full release
+  certification: question/approval wakes remain unexercised live. Installed
+  desktop/mobile, remote/LAN/Tailscale/Connect, live crash/restart recovery, busy steering and
+  periodic idle delivery are not certified by these passes. Recorded offline
+  checks used Node 24, not the pinned Node 26. Keep the existing reports and live
+  evidence with the release review; this section is not a replacement ledger.
+
+### Backup and backout limits
+
+Before first starting this fork on non-disposable state, stop the intended server
+and preserve a consistent, complete T3 home backup plus the matching build
+revision. Include `userdata/statev2.sqlite`, not just the legacy `state.sqlite`;
+do not copy an open SQLite file without a consistent snapshot procedure, or
+separate the database from any required `-wal`/`-shm` files. Keep workspace
+files/worktrees separately: a database backup does not save their uncommitted
+changes. Backups contain credentials and private conversations; keep them private.
+
+Oversight links, preferences and delivery/deduplication records are canonical
+side tables in that same database. A core event-log-only export cannot restore
+them. The [feature migrations](../../apps/server/src/overseer/Migrations.ts)
+use a separate migration track and also add a namespaced index to a core
+projection. Both run when the feature is off; disabling is not a schema downgrade
+or a backup strategy.
+
+The conservative backout is the **same integrated build** restarted with oversight
+[disabled](./development.md#experimental-oversight). Its
+[recovery path](../../apps/server/src/overseer/OverseerRecovery.ts) holds delivery,
+retires uncertain private transports and cancels private queued wakes/flushes;
+it preserves ordinary threads/messages and link/deduplication state. Re-enabling
+alone does not clear that hold: after inspecting the state, an explicit message
+or queue-resume action rearms the overseer. Recovery is best-effort and not
+live-certified: check server logs for `Overseer recovery` or
+`Overseer mailbox recovery` warnings and investigate failures before relying on
+private-wake cleanup. Do not manually delete side tables, edit mailbox rows or
+clear the shared outbox.
+
+A provider may have consumed a wake before its durable receipt was recorded;
+recovery may deliver it again. It does not undo worker edits or provider actions.
+Any other build opening a fork database is **not a certified rollback**, including
+an official/upstream release (older or newer) or an installed desktop app sharing
+that home. If a binary downgrade is necessary, preserve the newer home first
+and validate the older build against a separate copy of its matching pre-upgrade
+backup; never experiment on the only copy. Restoring an older snapshot loses work recorded
+after that snapshot and is not a merge of the two histories.
+
 ## What the workflow does
 
 - Workflow: `.github/workflows/release.yml`

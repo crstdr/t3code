@@ -80,7 +80,28 @@ different preference when needed.
 
 ### Experimental oversight
 
-Thread oversight is experimental and default off. Set `T3CODE_OVERSEER_ENABLED=true` in the server process environment before startup (for example, `T3CODE_OVERSEER_ENABLED=true vp run dev --home-dir /tmp/t3code-overseer --no-seed`). Restart with the variable unset or `false` to disable it; ordinary threads remain usable, but oversight delivery and link APIs are unavailable while disabled. Unrecognized boolean values fail startup. Use a disposable data directory for testing.
+Thread oversight is experimental and default off. Set `T3CODE_OVERSEER_ENABLED=true`
+in the server process environment before startup. The value is read once through
+Effect Config, not the mutable public ServerSettings schema. Unset, empty, or
+`false` leaves it off; unrecognized boolean values fail startup.
+
+For an isolated dev instance, from a fork checkout with dependencies already installed:
+
+```sh
+OVERSEER_HOME=$(mktemp -d /tmp/t3code-overseer-XXXXXX)
+T3CODE_OVERSEER_ENABLED=true vp run dev --home-dir "$OVERSEER_HOME" --no-seed
+```
+
+Verify the startup output points at that disposable home before using providers.
+Do not set `VITE_HTTP_URL` or `VITE_WS_URL`. Restart with the variable unset or
+`false` to disable oversight: ordinary threads remain usable, but automatic
+oversight delivery, link APIs, and wake configuration are unavailable. This does
+not undo database migrations or erase links. After re-enabling, send an explicit
+message to the overseer or explicitly resume its queue to rearm delivery.
+
+See [using oversight](../user/thread-sidebar.md#oversee-independent-threads-experimental)
+for the panel and worktree choice, and [release and rollback limits](./release.md#experimental-fork-oversight)
+before using non-disposable state.
 
 ### Sharing and remote debugging
 

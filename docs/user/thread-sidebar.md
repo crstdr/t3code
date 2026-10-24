@@ -227,6 +227,42 @@ Expand a tool call in the conversation to see its full command and output.
 Summaries shorten shell wrappers and can still describe the latest call after it
 finishes; the call's own result shows its status.
 
+## Oversee independent threads (experimental)
+
+When the environment has oversight enabled, ask a Codex or Claude thread to launch
+an overseen worker. Both threads must use Codex or Claude and belong to the same
+environment; the worker can be in another project. Oversight applies to newly
+launched top-level threads, not existing threads or provider-native subagents.
+For code changes, request a **new worktree** for each worker: an oversight link
+alone does not give it a separate checkout or prevent concurrent edits.
+
+On web and desktop, choose **Show oversight links** in the command palette.
+Use the panel to follow workers, return to their overseer, check
+delivery status, or **Unlink**. Worker status and notice delivery are separate: a
+finished worker can still have a pending or held notice. Unlink permanently ends
+that link's notifications without stopping either thread; you cannot relink the
+same worker. Oversight link controls are not available on mobile.
+
+Wake preferences are saved per overseer and shared across your connected devices:
+
+- **Auto-wake on all updates** is on by default. Turning it off holds routine
+  completion notices (including failed runs), not pending questions or approvals.
+  Turning it back on allows pending completions to be delivered.
+- **Routine wake-ups no more often than** limits routine completion wakes to the
+  selected interval while auto-wake is on. It is off by default. Questions and
+  approvals bypass it and can carry ready completions with them when auto-wake is on.
+- **Wake when idle for** independently enables periodic wakes after the overseer
+  has been idle for the selected interval, even with auto-wake off. It is off by
+  default and is not throttled by the routine interval. Each wake tells the agent
+  to do only checks or follow-ups you already requested, ending its turn if none
+  are due. This is an instruction, not a restriction on the agent's tools.
+
+These controls do not stop workers or recall input already sent to a provider.
+Stop on the overseer holds automatic wakes until an explicit new message or queue
+resume; it does not stop independent workers. Archiving either thread suspends
+its notices; unarchiving allows catch-up. An oversight link grants no extra
+access or permission to answer questions or approve actions on your behalf.
+
 ## Snooze until later
 
 Choose **Snooze → Custom…** from a thread's menu to pick a date and time in your
