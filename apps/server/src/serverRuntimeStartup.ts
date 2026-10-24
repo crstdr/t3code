@@ -35,6 +35,7 @@ import * as LegacyV1ThreadImporter from "./orchestration-v2/legacy/LegacyV1Threa
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeRecoveryService.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
+import * as OverseerStartup from "./overseer/OverseerStartup.ts";
 import * as ThreadLaunch from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
@@ -554,7 +555,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
       recoverDelegatedTasks: runStartupPhase(
         "orchestration-v2.delegated-tasks.recover",
         orchestrator.recoverDelegatedTasks,
-      ),
+      ).pipe(Effect.andThen(OverseerStartup.recoverLaunches)),
       startEffectWorker: runStartupPhase(
         "orchestration-v2.effect-worker.start",
         startEffectWorkerWithRelay({
