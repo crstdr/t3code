@@ -67,7 +67,9 @@ describe("command permissions", () => {
       Effect.gen(function* () {
         const registry = yield* setup;
         const unlink = createCommandPermissions(runtime, WS_METHODS.oversightUnlink);
-        const command = createOverseerEnvironmentAtoms(runtime).unlink;
+        const commands = createOverseerEnvironmentAtoms(runtime);
+        const command = commands.unlink;
+        const configure = createCommandPermissions(runtime, WS_METHODS.oversightConfigure);
         registry.set(
           sessions(env),
           AsyncResult.success({
@@ -79,12 +81,18 @@ describe("command permissions", () => {
         registry.set(sessions(other), AsyncResult.success(grant(true)));
         expect(registry.get(unlink.permissionAtom(env))).toBe(false);
         expect(registry.get(command.permissionAtom(env))).toBe(false);
+        expect(registry.get(commands.configure.permissionAtom(env))).toBe(false);
+        expect((yield* configure.authorize(registry, env).pipe(Effect.flip)).requiredScope).toBe(
+          AuthOrchestrationOperateScope,
+        );
         expect((yield* unlink.authorize(registry, env).pipe(Effect.flip)).requiredScope).toBe(
           AuthOrchestrationOperateScope,
         );
         registry.set(sessions(env), AsyncResult.success(grant(true)));
         expect(registry.get(unlink.permissionAtom(env))).toBe(true);
         yield* unlink.authorize(registry, env);
+        expect(registry.get(commands.configure.permissionAtom(env))).toBe(true);
+        yield* configure.authorize(registry, env);
       }),
   );
   it.effect("requires the destination preview grant to close a browser tab", () =>

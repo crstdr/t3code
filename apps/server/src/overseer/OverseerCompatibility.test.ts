@@ -11,7 +11,7 @@ import manifest from "../../../../packages/contracts/src/fixtures/official-v0.1.
 
 it("disabled RPC registration has exactly the upstream method surface", () => {
   assert.deepEqual([...WsRpcGroup.omit(...Feature.rpcTags).requests.keys()].sort(), rpcTags);
-  assert.equal(WsRpcGroup.requests.size, rpcTags.length + 2);
+  assert.equal(WsRpcGroup.requests.size, rpcTags.length + 3);
 });
 
 it.effect("pins the actual official v0.1.2 decoder and its complete dependency closure", () =>

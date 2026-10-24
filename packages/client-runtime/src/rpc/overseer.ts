@@ -3,6 +3,7 @@ import {
   WS_METHODS,
   type OversightWatchInput,
   type OversightUnlinkInput,
+  type OversightConfigureInput,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -27,6 +28,12 @@ export const watch = (input: OversightWatchInput) =>
       ),
     ),
   );
+export const configure = Effect.fn("Overseer.configure")(function* (
+  input: OversightConfigureInput,
+) {
+  if (!(yield* supported)) return yield* new OversightError({ reason: "unsupported" });
+  return yield* requestGuarded(WS_METHODS.oversightConfigure, input);
+});
 export const unlink = Effect.fn("Overseer.unlink")(function* (input: OversightUnlinkInput) {
   if (!(yield* supported)) return yield* new OversightError({ reason: "unsupported" });
   return yield* requestGuarded(WS_METHODS.oversightUnlink, input);

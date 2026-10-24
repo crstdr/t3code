@@ -3,7 +3,11 @@ import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
 import { WS_METHODS } from "@t3tools/contracts";
 
-export const rpcTags = [WS_METHODS.oversightWatch, WS_METHODS.oversightUnlink] as const;
+export const rpcTags = [
+  WS_METHODS.oversightWatch,
+  WS_METHODS.oversightUnlink,
+  WS_METHODS.oversightConfigure,
+] as const;
 
 export class Enabled extends Context.Reference<boolean>("t3/overseer/Enabled", {
   defaultValue: () => false,

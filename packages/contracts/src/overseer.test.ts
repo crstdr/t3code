@@ -7,6 +7,8 @@ import {
   OversightWatchInput,
   OversightUnlinkInput,
   OversightUnlinkResult,
+  OversightPreferences,
+  OversightConfigureInput,
 } from "./overseer.ts";
 
 const now = "2026-10-23T00:00:00.000Z";
@@ -67,6 +69,13 @@ const shell = {
 it("round-trips the isolated public contracts without requiring capability on old descriptors", () => {
   const frame = {
     revision: 12,
+    preferences: {
+      autoWake: true,
+      cadenceEnabled: false,
+      cadenceMinutes: 5,
+      idleEnabled: false,
+      idleMinutes: 30,
+    },
     links: [
       {
         linkId: "opaque",
@@ -84,12 +93,32 @@ it("round-trips the isolated public contracts without requiring capability on ol
   for (const [schema, input] of [
     [OversightWatchFrame, frame],
     [OversightWatchInput, { threadId: "observer" }],
+    [OversightConfigureInput, { threadId: "observer", preferences: frame.preferences }],
+    [OversightConfigureInput, { threadId: "observer", preferences: { idleEnabled: false } }],
+    [OversightWatchFrame, { revision: 0, links: [] }],
     [OversightUnlinkInput, { linkId: "opaque" }],
     [OversightUnlinkResult, { linkId: "opaque", closed: true }],
   ] as const) {
     const codec = Schema.toCodecJson(schema);
     expect(Schema.encodeSync(codec)(Schema.decodeUnknownSync(codec)(input))).toEqual(input);
   }
+});
+
+it("wake preferences accept only the approved option lists", () => {
+  const isPreferences = Schema.is(OversightPreferences);
+  const defaults = {
+    autoWake: true,
+    cadenceEnabled: false,
+    cadenceMinutes: 5,
+    idleEnabled: false,
+    idleMinutes: 30,
+  };
+  for (const cadenceMinutes of [1, 5, 10, 15, 30, 60, 180])
+    expect(isPreferences({ ...defaults, cadenceMinutes })).toBe(true);
+  for (const idleMinutes of [10, 30, 60, 120, 360])
+    expect(isPreferences({ ...defaults, idleMinutes })).toBe(true);
+  expect(isPreferences({ ...defaults, cadenceMinutes: 2 })).toBe(false);
+  expect(isPreferences({ ...defaults, idleMinutes: 5 })).toBe(false);
 });
 
 it("actual official release decoders accept new encoded ordinary worker, wake, event and shell fixtures", () => {

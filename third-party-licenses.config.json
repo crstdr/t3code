@@ -2,6 +2,16 @@
   "customNotices": [
     {
       "bundles": ["desktop", "web"],
+      "license": "Apache-2.0",
+      "name": "RepoPrompt CE oversight role vectors (Fb/baron)",
+      "sourceUrl": "https://github.com/repoprompt/repoprompt-ce/pull/1330",
+      "noticeFiles": [
+        "apps/web/src/components/overseer/icons/NOTICE",
+        "apps/web/src/components/overseer/icons/LICENSE"
+      ]
+    },
+    {
+      "bundles": ["desktop", "web"],
       "license": "MIT",
       "name": "Ionic keyboard assist",
       "sourceUrl": "https://github.com/ionic-team/ionic-framework/blob/main/core/src/utils/keyboard/keyboard.ts",

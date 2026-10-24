@@ -13,6 +13,11 @@ export function createOverseerEnvironmentAtoms<R, E>(
       idleTtlMs: 0,
       subscribe: Overseer.watch,
     }),
+    configure: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:oversight:configure",
+      tag: WS_METHODS.oversightConfigure,
+      execute: Overseer.configure,
+    }),
     unlink: createEnvironmentRpcCommand(runtime, {
       label: "environment-command:oversight:unlink",
       tag: WS_METHODS.oversightUnlink,

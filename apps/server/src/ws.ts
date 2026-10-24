@@ -1852,6 +1852,10 @@ export const layerWsRpc = (
           Option.isSome(oversight)
             ? oversight.value.watch(input)
             : Stream.fail(new OversightError({ reason: "unsupported" })),
+        [WS_METHODS.oversightConfigure]: (input) =>
+          Option.isSome(oversight)
+            ? oversight.value.configure(input)
+            : Effect.fail(new OversightError({ reason: "unsupported" })),
         [WS_METHODS.oversightUnlink]: (input) =>
           Option.isSome(oversight)
             ? oversight.value.unlink(input)
