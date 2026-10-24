@@ -1261,7 +1261,7 @@ it.effect(
         "overseer_links_target_project_idx",
         "overseer_links_launch_idx",
         "overseer_links_closed_idx",
-        "overseer_occurrences_pending_idx",
+        "overseer_occurrences_attention_order_idx",
         "overseer_occurrences_candidates_idx",
         "overseer_occurrences_batch_idx",
         "overseer_mailboxes_dirty_idx",
@@ -1286,11 +1286,11 @@ it.effect(
         combined,
         "SEARCH overseer_links USING COVERING INDEX overseer_links_target_project_idx (target_project_id=?)",
       );
-      const pending = plans.find((plan) => plan.query.includes("ORDER BY o.source_sequence"));
+      const pending = plans.find((plan) => plan.query.includes("ORDER BY (o.kind = 'completion')"));
       assert.isDefined(pending);
       assert.include(
         pending!.details,
-        "SEARCH o USING INDEX overseer_occurrences_pending_idx (observer_thread_id=?)",
+        "SEARCH o USING INDEX overseer_occurrences_attention_order_idx (observer_thread_id=? AND <expr><?)",
       );
       assert.notInclude(pending!.details, "USE TEMP B-TREE FOR ORDER BY");
     }).pipe(Effect.provide(layerTest)),

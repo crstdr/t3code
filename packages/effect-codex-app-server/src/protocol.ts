@@ -59,6 +59,7 @@ export interface CodexAppServerPatchedProtocol {
   readonly request: (
     method: string,
     payload?: unknown,
+    options?: { readonly onEnqueued?: Effect.Effect<void> },
   ) => Effect.Effect<unknown, CodexError.CodexAppServerError>;
   readonly notify: (
     method: string,
@@ -461,6 +462,7 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
     const request = Effect.fn("CodexAppServerProtocol.request")(function* (
       method: string,
       payload?: unknown,
+      requestOptions?: { readonly onEnqueued?: Effect.Effect<void> },
     ) {
       const requestId = yield* Ref.modify(
         nextRequestId,
@@ -470,14 +472,15 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
       yield* Ref.update(pending, (current) =>
         new Map(current).set(String(requestId), { deferred, method }),
       );
-      yield* offerOutgoing({
-        id: requestId,
-        method,
-        ...(payload !== undefined ? { params: payload } : {}),
-      }).pipe(Effect.tapError(() => removePending(String(requestId))));
-      return yield* Deferred.await(deferred).pipe(
-        Effect.onInterrupt(() => removePending(String(requestId))),
-      );
+      return yield* Effect.gen(function* () {
+        yield* offerOutgoing({
+          id: requestId,
+          method,
+          ...(payload !== undefined ? { params: payload } : {}),
+        }).pipe(Effect.tapError(() => removePending(String(requestId))));
+        if (requestOptions?.onEnqueued !== undefined) yield* requestOptions.onEnqueued;
+        return yield* Deferred.await(deferred);
+      }).pipe(Effect.onInterrupt(() => removePending(String(requestId))));
     });
 
     const notify = (method: string, payload?: unknown) =>

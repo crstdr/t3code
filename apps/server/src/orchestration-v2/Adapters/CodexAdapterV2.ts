@@ -77,6 +77,7 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexSchema from "effect-codex-app-server/schema";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as OverseerNative from "../../overseer/OverseerNative.ts";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -6426,7 +6427,24 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               else next.delete(threadId);
               return next;
             });
-            const started = yield* client.request("turn/start", turnStartParams);
+            const overseer = yield* OverseerNative.Observer;
+            const response = overseer
+              ? yield* overseer.handoff(undefined, (onEnqueued) =>
+                  client.request("turn/start", turnStartParams, { onEnqueued }),
+                )
+              : turnInput.message.messageId.startsWith("message:overseer:")
+                ? Option.none()
+                : Option.some(yield* client.request("turn/start", turnStartParams));
+            if (Option.isNone(response))
+              return yield* new ProviderAdapter.ProviderAdapterTurnStartError({
+                driver: CODEX_PROVIDER,
+                threadId: turnInput.threadId,
+                providerThreadId: turnInput.providerThread.id,
+                runId: turnInput.runId,
+                cause: new OverseerNative.Fenced(),
+              });
+            const started = response.value;
+            if (overseer) yield* overseer.received("codex_response");
             yield* registerRootTurn({
               turnInput,
               nativeTurnId: started.turn.id,
@@ -6889,11 +6907,21 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }
 
               const codexInput = yield* toCodexInput(turnInput);
-              yield* client.request("turn/steer", {
+              const overseer = yield* OverseerNative.Observer;
+              const params = {
                 expectedTurnId: activeTurn.nativeTurnId,
                 input: codexInput,
                 threadId,
-              });
+              };
+              if (overseer) {
+                const response = yield* overseer.handoff(undefined, (onEnqueued) =>
+                  client.request("turn/steer", params, { onEnqueued }),
+                );
+                if (Option.isNone(response)) return yield* new OverseerNative.Fenced();
+                yield* overseer.received("codex_response");
+              } else if (turnInput.message.messageId.startsWith("message:overseer:"))
+                return yield* new OverseerNative.Fenced();
+              else yield* client.request("turn/steer", params);
             },
             (effect, turnInput) =>
               effect.pipe(

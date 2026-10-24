@@ -33,6 +33,9 @@ import * as EventSink from "../EventSink.ts";
 import * as EventStore from "../EventStore.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Orchestrator from "../Orchestrator.ts";
+import * as OverseerMailbox from "../../overseer/OverseerMailbox.ts";
+import * as OverseerContinuation from "../../overseer/OverseerContinuation.ts";
+import * as OverseerTransport from "../../overseer/OverseerTransport.ts";
 import * as ProjectionStore from "../ProjectionStore.ts";
 import * as ProjectStore from "../ProjectStore.ts";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
@@ -276,6 +279,7 @@ export function layerWithRegistry<Error>(
   | EffectWorker.OrchestrationEffectWorkerV2
   | EventSink.EventSinkV2
   | ProviderSessionManager.ProviderSessionManagerV2
+  | ProviderTurnStartService.ProviderTurnStartServiceV2
   | CommandOutputRecorder.CommandOutputRecorder,
   Error | MigrationError | PlatformError.PlatformError | SqlError
 > {
@@ -392,6 +396,7 @@ export function layerWithRegistry<Error>(
   const layerProviderTurnStartServiceProvided = ProviderTurnStartService.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        OverseerTransport.layer.pipe(Layer.provide(layerDatabase)),
         layerContextHandoffServiceProvided,
         layerEventSinkProvided,
         IdAllocator.layer,
@@ -408,7 +413,13 @@ export function layerWithRegistry<Error>(
     ),
   );
   const layerProviderTurnControlServiceProvided = ProviderTurnControlService.layer.pipe(
-    Layer.provide(Layer.merge(layerStores, layerProviderSessionManagerProvided)),
+    Layer.provide(
+      Layer.mergeAll(
+        layerStores,
+        layerProviderSessionManagerProvided,
+        OverseerTransport.layer.pipe(Layer.provide(layerDatabase)),
+      ),
+    ),
   );
   const layerRuntimeRequestServiceProvided = RuntimeRequestService.layer.pipe(
     Layer.provide(Layer.merge(layerStores, layerProviderSessionManagerProvided)),
@@ -450,6 +461,8 @@ export function layerWithRegistry<Error>(
   const layerOrchestratorProvided = Orchestrator.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        OverseerMailbox.layer.pipe(Layer.provide(layerDatabase)),
+        OverseerContinuation.layer.pipe(Layer.provide(layerDatabase)),
         layerCheckpointServiceProvided,
         CommandPolicy.layer,
         layerContextHandoffServiceProvided,
@@ -492,6 +505,8 @@ export function layerWithRegistry<Error>(
   const layerEffectExecutorProvided = EffectWorker.layerExecutor.pipe(
     Layer.provide(
       Layer.mergeAll(
+        layerOrchestratorProvided,
+        OverseerContinuation.layer.pipe(Layer.provide(layerDatabase)),
         layerRunFinalizationServiceProvided,
         layerCheckpointRollbackServiceProvided,
         layerProviderSessionManagerProvided,
@@ -510,6 +525,7 @@ export function layerWithRegistry<Error>(
   const layerReplayRuntime = Layer.mergeAll(
     layerOrchestratorProvided,
     layerProviderSessionManagerProvided,
+    layerProviderTurnStartServiceProvided,
     layerEffectWorkerProvided,
     layerEventSinkProvided,
     layerContinuationWorkerProvided,
@@ -536,6 +552,7 @@ export function layerWithRegistry<Error>(
             Layer.mergeAll(
               layerStores,
               layerEventSinkProvided,
+              OverseerContinuation.layer.pipe(Layer.provide(layerDatabase)),
               IdAllocator.layer,
               layerServerSettings,
             ),

@@ -34,6 +34,7 @@ import * as EventStore from "./EventStore.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
+import * as OverseerWakeFacts from "../overseer/OverseerWakeFacts.ts";
 
 export class EventSinkWriteError extends Schema.TaggedError<EventSinkWriteError>()(
   "EventSinkWriteError",
@@ -218,6 +219,7 @@ const layerBase: Layer.Layer<
   | ProjectStore.ProjectStoreV2
   | SqlClient.SqlClient
   | TurnItemPositionStore.TurnItemPositionStoreV2
+  | OverseerWakeFacts.OverseerWakeFacts
 > = Layer.effect(
   EventSinkV2,
   Effect.gen(function* () {
@@ -228,6 +230,7 @@ const layerBase: Layer.Layer<
     const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
     const projectStore = yield* ProjectStore.ProjectStoreV2;
     const turnItemPositions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
+    const overseerWakeFacts = yield* OverseerWakeFacts.OverseerWakeFacts;
     const liveEvents = yield* PubSub.unbounded<OrchestrationV2StoredEvent>();
     const liveEventsByType = new Map<
       OrchestrationV2DomainEvent["type"],
@@ -254,12 +257,14 @@ const layerBase: Layer.Layer<
     const publishStoredEvents = (
       events: ReadonlyArray<OrchestrationV2StoredEvent>,
       outcomes: ReadonlyArray<RunOutcome>,
+      context?: OverseerWakeFacts.CommitContext,
     ) =>
       runOutcomes
         .record(outcomes)
         .pipe(
           Effect.andThen(eventStore.publishCommitted(events)),
           Effect.andThen(publishLiveEvents(events)),
+          Effect.andThen(overseerWakeFacts.notifyThreadEvents(events, context)),
         );
 
     // Transactions commit one at a time, but each writer publishes after its
@@ -281,8 +286,8 @@ const layerBase: Layer.Layer<
           ),
           Effect.uninterruptible,
         );
-        return sql
-          .withTransaction(Effect.tap(transaction, () => takeLane))
+        return overseerWakeFacts
+          .commit(sql.withTransaction(Effect.tap(transaction, () => takeLane)))
           .pipe(
             Effect.tap(publish),
             Effect.ensuring(
@@ -362,7 +367,10 @@ const layerBase: Layer.Layer<
 
     const applyStoredEvents =
       /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
-      Effect.fnUntraced(function* (storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>) {
+      Effect.fnUntraced(function* (
+        storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>,
+        context?: OverseerWakeFacts.CommitContext,
+      ) {
         yield* Effect.forEach(storedEvents, (stored) => projectionStore.apply(stored.event), {
           concurrency: 1,
         });
@@ -389,6 +397,7 @@ const layerBase: Layer.Layer<
               updated_at = excluded.updated_at
           `;
         }
+        yield* overseerWakeFacts.threadEvents(storedEvents, context);
         // Read lineage here, on the connection this transaction holds; see makeRunOutcomeRecorder.
         return yield* runOutcomes.prepare(storedEvents);
       });
@@ -451,8 +460,8 @@ const layerBase: Layer.Layer<
             ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
             events: normalized,
           });
-          const outcomes = yield* applyStoredEvents(committed);
           yield* effectOutbox.enqueue(input.effects);
+          const outcomes = yield* applyStoredEvents(committed);
           return { committed, outcomes };
         }).pipe(Effect.withTracerEnabled(false)),
         ({ committed, outcomes }) =>
@@ -463,6 +472,7 @@ const layerBase: Layer.Layer<
             yield* publishStoredEvents(committed, outcomes);
           }),
       );
+      yield* overseerWakeFacts.warnUnconfirmed(committed);
       return committed;
     });
 
@@ -510,8 +520,8 @@ const layerBase: Layer.Layer<
               ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
               events: normalized,
             });
-            const outcomes = yield* applyStoredEvents(storedEvents);
             yield* effectOutbox.enqueue(input.effects ?? []);
+            const outcomes = yield* applyStoredEvents(storedEvents);
             return { committed: true as const, storedEvents, outcomes };
           }),
           (result) =>
@@ -522,6 +532,10 @@ const layerBase: Layer.Layer<
               }
               yield* publishStoredEvents(result.storedEvents, result.outcomes);
             }),
+        ).pipe(
+          Effect.tap((result) =>
+            result.committed ? overseerWakeFacts.warnUnconfirmed(result.storedEvents) : Effect.void,
+          ),
         );
       },
     );
@@ -582,6 +596,10 @@ const layerBase: Layer.Layer<
           result.committed
             ? publishStoredEvents(result.storedEvents, result.outcomes)
             : Effect.void,
+      ).pipe(
+        Effect.tap((result) =>
+          result.committed ? overseerWakeFacts.warnUnconfirmed(result.storedEvents) : Effect.void,
+        ),
       );
     });
 
@@ -618,6 +636,10 @@ const layerBase: Layer.Layer<
           result.committed
             ? publishStoredEvents(result.storedEvents, result.outcomes)
             : Effect.void,
+      ).pipe(
+        Effect.tap((result) =>
+          result.committed ? overseerWakeFacts.warnUnconfirmed(result.storedEvents) : Effect.void,
+        ),
       );
     });
 
@@ -661,13 +683,9 @@ const layerBase: Layer.Layer<
             commandId: input.commandId,
             events: normalized,
           });
-          const sequence = storedEvents.at(-1)?.sequence;
-          if (sequence === undefined) {
-            return yield* Effect.die(
-              new Error(`Command ${input.commandId} produced no orchestration events.`),
-            );
-          }
-          const outcomes = yield* applyStoredEvents(storedEvents);
+          const sequence =
+            storedEvents.at(-1)?.sequence ??
+            (yield* eventStore.latestSequence({ threadId: input.threadId }));
           yield* effectOutbox.enqueue(input.effects);
           const receipt: CommandReceiptStore.CommandReceiptV2 = {
             commandId: input.commandId,
@@ -686,6 +704,11 @@ const layerBase: Layer.Layer<
                   threadId: input.threadId,
                   ...input.cancelUnsettledEffects,
                 });
+          const outcomes = yield* applyStoredEvents(storedEvents, {
+            commandType: input.commandType,
+            threadId: input.threadId,
+            cancelledEffects: cancelledEffectIds.length > 0,
+          });
           return { receipt, storedEvents, outcomes, committed: true as const, cancelledEffectIds };
         }),
         (result) =>
@@ -694,9 +717,17 @@ const layerBase: Layer.Layer<
             if (result.committed && input.effects.length > 0) {
               yield* effectOutbox.notifyAvailable(input.effects.length);
             }
-            if (result.committed) yield* publishStoredEvents(result.storedEvents, result.outcomes);
+            if (result.committed) {
+              yield* publishStoredEvents(result.storedEvents, result.outcomes, {
+                commandType: input.commandType,
+                threadId: input.threadId,
+                cancelledEffects: result.cancelledEffectIds.length > 0,
+              });
+            }
           }),
       );
+      if (result.committed)
+        yield* overseerWakeFacts.warnUnconfirmed(result.storedEvents, input.commandType);
       return {
         receipt: result.receipt,
         storedEvents: result.storedEvents,
@@ -759,12 +790,17 @@ const layerBase: Layer.Layer<
             }
             const event = yield* eventStore.appendProjectEvent(input.event);
             yield* projectStore.apply(event);
+            yield* overseerWakeFacts.projectEvent(event);
             const receipt = { ...reserved, resultSequence: event.sequence };
             yield* commandReceipts.upsert(receipt);
             return { receipt, event };
           }),
           (result) =>
-            result.event === undefined ? Effect.void : eventStore.publishCommitted([result.event]),
+            result.event === undefined
+              ? Effect.void
+              : eventStore
+                  .publishCommitted([result.event])
+                  .pipe(Effect.andThen(overseerWakeFacts.notifyProjectEvent(result.event))),
         );
         return { receipt: result.receipt, committed: result.event !== undefined };
       },
@@ -998,14 +1034,15 @@ const layerBase: Layer.Layer<
 /**
  * Keeping the outbox instance shared with the worker is important because enqueue notifications
  * are in-memory wakeups backed by the durable SQL queue.
+ * Wake-facts producers and consumers likewise share the same OverseerWakeFacts.layer reference.
  */
-export const layerFromStores = layerBase;
+export const layerFromStores = layerBase.pipe(Layer.provide(OverseerWakeFacts.layer));
 
 export const layer: Layer.Layer<
   EventSinkV2,
   never,
   EventStore.EventStoreV2 | ProjectionStore.ProjectionStoreV2 | SqlClient.SqlClient
-> = layerBase.pipe(
+> = layerFromStores.pipe(
   Layer.provide(
     Layer.mergeAll(
       CommandReceiptStore.layer,

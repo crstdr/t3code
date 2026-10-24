@@ -103,6 +103,7 @@ import {
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as OverseerNative from "../../overseer/OverseerNative.ts";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -3451,6 +3452,7 @@ interface ActiveClaudeTurnContext {
   readonly subagentsByToolUseId: Map<string, ActiveClaudeSubagent>;
   readonly subagentNodesByTaskId: Map<string, OrchestrationV2ExecutionNode["id"]>;
   readonly promptUuid: string | null;
+  readonly overseerObservation?: OverseerNative.Observation;
   promptEcho: "pending" | "confirmed";
   promptStarted: boolean;
   nativeWakeStarted: boolean;
@@ -8677,6 +8679,19 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const context = yield* Ref.get(activeTurn);
           const liveQuery = yield* Ref.get(queryContext);
           if (
+            context?.promptUuid &&
+            context.overseerObservation &&
+            liveQuery?.query === input.query
+          ) {
+            if (claudeEchoedPromptUuids(message).includes(context.promptUuid))
+              yield* context.overseerObservation.received("claude_echo", context.promptUuid);
+            else {
+              const lifecycle = claudePromptLifecycle(message);
+              if (lifecycle?.uuid === context.promptUuid && lifecycle.state === "started")
+                yield* context.overseerObservation.received("claude_started", context.promptUuid);
+            }
+          }
+          if (
             context?.promptUuid === null &&
             liveQuery?.query === input.query &&
             isClaudeRootTurnFrame(message)
@@ -9481,7 +9496,21 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     uuid: promptUuid,
                   });
             const querySession = yield* openQuery(turnInput, nativeThreadId);
+            const overseerObservation = yield* OverseerNative.Observer;
+            if (
+              turnInput.message.messageId.startsWith("message:overseer:") &&
+              (!overseerObservation || promptUuid === null)
+            ) {
+              return yield* new ProviderAdapter.ProviderAdapterTurnStartError({
+                driver: CLAUDE_PROVIDER,
+                threadId: turnInput.threadId,
+                providerThreadId: turnInput.providerThread.id,
+                runId: turnInput.runId,
+                cause: new OverseerNative.Fenced(),
+              });
+            }
             const context: ActiveClaudeTurnContext = {
+              ...(overseerObservation === undefined ? {} : { overseerObservation }),
               input: turnInput,
               queryPolicy: querySession.queryPolicy,
               nativeThreadId,
@@ -9586,9 +9615,23 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               });
             });
             if (userMessage !== null) {
-              yield* attachTurn;
-              yield* startUserTurnForWakeReports(nativeThreadId);
-              yield* querySession.query.offer(userMessage);
+              const offer = (onEnqueued: Effect.Effect<void>) =>
+                attachTurn.pipe(
+                  Effect.andThen(startUserTurnForWakeReports(nativeThreadId)),
+                  Effect.andThen(querySession.query.offer(userMessage)),
+                  Effect.andThen(onEnqueued),
+                );
+              if (overseerObservation) {
+                const offered = yield* overseerObservation.handoff(promptUuid ?? undefined, offer);
+                if (Option.isNone(offered))
+                  return yield* new ProviderAdapter.ProviderAdapterTurnStartError({
+                    driver: CLAUDE_PROVIDER,
+                    threadId: turnInput.threadId,
+                    providerThreadId: turnInput.providerThread.id,
+                    runId: turnInput.runId,
+                    cause: new OverseerNative.Fenced(),
+                  });
+              } else yield* offer(Effect.void);
               return;
             }
             // Transcript reads suspend replay. Hold live SDK frames until the whole

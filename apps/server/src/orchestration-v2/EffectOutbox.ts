@@ -29,6 +29,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { forkParked } from "../serverActivation.ts";
 
 export const OrchestrationEffectRequestV2 = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("overseer.mailbox.flush"), generation: Schema.String }),
   Schema.Struct({
     type: Schema.Literal("provider-runtime.continue"),
     sourceRunId: RunId,
@@ -121,6 +122,7 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
 export type OrchestrationEffectRequestV2 = typeof OrchestrationEffectRequestV2.Type;
 
 export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
+  "overseer.mailbox.flush",
   "provider-runtime.continue",
   "provider-session.detach",
   "provider-thread.rollback",
@@ -346,17 +348,10 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
                 }
               )
             )
-            AND (
-              (
-                candidate.effect_type = 'thread-title.generate'
-                AND active.effect_type = 'thread-title.generate'
-              )
-              OR
-              (
-                candidate.effect_type != 'thread-title.generate'
-                AND active.effect_type != 'thread-title.generate'
-              )
-            )
+            AND (CASE candidate.effect_type
+              WHEN 'thread-title.generate' THEN 1 WHEN 'overseer.mailbox.flush' THEN 2 ELSE 0 END)
+              = (CASE active.effect_type
+              WHEN 'thread-title.generate' THEN 1 WHEN 'overseer.mailbox.flush' THEN 2 ELSE 0 END)
         )
       `;
 

@@ -1964,6 +1964,83 @@ it.layer(layerTest)("delegated tasks across a server restart", (it) => {
     }),
   );
 
+  it.effect(
+    "startup delegated recovery cannot settle a child from its unaccepted private wake",
+    () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const sink = yield* EventSink.EventSinkV2;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("thread:private-recovery-parent");
+        const projectId = ProjectId.make("project:private-recovery-parent");
+        const runId = RunId.make("run:private-recovery-parent");
+        const rootNodeId = NodeId.make("node:private-recovery-parent");
+        yield* seedParentWithTerminalTask({
+          threadId,
+          projectId,
+          runId,
+          rootNodeId,
+          taskId: NodeId.make("node:private-recovery-settled"),
+          deliveryState: "delivered",
+          now,
+        });
+        const child = yield* seedRestartCancelledChild({
+          parentThreadId: threadId,
+          projectId,
+          parentRunId: runId,
+          rootNodeId,
+          name: "private-recovery-child",
+          completionWake: "always",
+          continuationPending: false,
+          now,
+        });
+        const projection = yield* orchestrator.getThreadProjection(child.childThreadId);
+        const source = projection.runs.find((run) => run.id === child.childRunId)!;
+        const messageId = MessageId.make("message:overseer:unaccepted-child");
+        yield* sink.write({
+          events: [
+            {
+              id: EventId.make("private-child-message"),
+              type: "message.updated",
+              threadId: child.childThreadId,
+              occurredAt: now,
+              payload: {
+                id: messageId,
+                threadId: child.childThreadId,
+                runId: source.id,
+                nodeId: null,
+                role: "user",
+                text: "Private wake fixture",
+                attachments: [],
+                streaming: false,
+                createdBy: "agent",
+                creationSource: "server",
+                createdAt: now,
+                updatedAt: now,
+                notification: {
+                  source: { kind: "background_task" },
+                  outcome: "updated",
+                  summary: "Oversight updates",
+                },
+              },
+            },
+            {
+              id: EventId.make("private-child-run"),
+              type: "run.updated",
+              threadId: child.childThreadId,
+              occurredAt: now,
+              payload: { ...source, userMessageId: messageId },
+            },
+          ],
+        });
+        const before = yield* orchestrator.getThreadProjection(threadId);
+        yield* orchestrator.recoverDelegatedTasks;
+        const after = yield* orchestrator.getThreadProjection(threadId);
+        assert.deepEqual(after.subagents, before.subagents);
+        assert.deepEqual(after.contextTransfers, before.contextTransfers);
+      }),
+  );
+
   it.effect("settles a restart-cancelled child whose continuation declines to start", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;

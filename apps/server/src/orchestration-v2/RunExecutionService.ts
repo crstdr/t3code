@@ -52,6 +52,7 @@ import {
 } from "@t3tools/provider-core/server/failure";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
+import { fencedTerminal } from "../overseer/OverseerNative.ts";
 
 export interface ProviderEventRoutingState {
   readonly ownedThreadIds: ReadonlySet<ThreadId>;
@@ -1653,12 +1654,15 @@ export const layer: Layer.Layer<
                             expectedStatus: "running",
                           },
                           openRunOwnedSubagents: openSubagents,
-                          terminal: makeFailedTerminalEvent(
-                            makeProviderFailure({
-                              cause: Cause.squash(cause),
-                              class: Exit.isFailure(shouldStart) ? "unknown" : "provider_error",
-                            }),
-                            latestItemOrdinal + 1,
+                          terminal: fencedTerminal(
+                            Cause.squash(cause),
+                            makeFailedTerminalEvent(
+                              makeProviderFailure({
+                                cause: Cause.squash(cause),
+                                class: Exit.isFailure(shouldStart) ? "unknown" : "provider_error",
+                              }),
+                              latestItemOrdinal + 1,
+                            ),
                           ),
                           failureItemPersisted: false,
                           refreshAfterTurn,

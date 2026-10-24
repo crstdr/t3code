@@ -62,6 +62,10 @@ import type * as ProviderContinuationRequests from "@t3tools/provider-core/serve
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
 import { makeReplayServerConfig, withCodexReplayChildMetadata } from "./CodexAdapterV2.testkit.ts";
 import * as CodexAdapterV2Testkit from "./CodexAdapterV2.testkit.ts";
+import * as OverseerNative from "../../overseer/OverseerNative.ts";
+import * as OverseerGate from "../../overseer/OverseerGate.ts";
+import * as OverseerFeature from "../../overseer/OverseerFeature.ts";
+import { wakeExample } from "../../overseer/OverseerText.testkit.ts";
 
 const replayTranscriptJson = Schema.fromJsonString(CodexReplay.CodexAppServerReplayTranscript);
 const encodeReplayTranscriptJson = Schema.encodeEffect(replayTranscriptJson);
@@ -692,10 +696,10 @@ describe("CodexAdapterV2 session initialize", () => {
                 (client) =>
                   ({
                     ...client,
-                    request: (method, params) =>
+                    request: (method, params, requestOptions) =>
                       Effect.sync(() => {
                         if (method === "initialize") initializeRequests++;
-                      }).pipe(Effect.andThen(client.request(method, params))),
+                      }).pipe(Effect.andThen(client.request(method, params, requestOptions))),
                   }) satisfies CodexClient.CodexAppServerClient["Service"],
               ),
               Effect.mapError(
@@ -881,17 +885,26 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       Effect.void,
     onRequest: (method: string, params: unknown) => Effect.Effect<void> = () => Effect.void,
     readChildMetadata?: Parameters<typeof withCodexReplayChildMetadata>[2],
+    beforeEmitInbound?: CodexReplay.CodexAppServerReplayDriver["beforeEmitInbound"],
   ) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const serverConfig = yield* makeReplayServerConfig(transcript.scenario).pipe(Effect.orDie);
       const changes = yield* makeChangeSignal;
+      const driver =
+        beforeEmitInbound === undefined
+          ? undefined
+          : yield* CodexReplay.makeReplayDriver(transcript, { beforeEmitInbound });
       const continuationRequests: Array<ProviderContinuationRequests.ProviderContinuationRequest> =
         [];
       const clientFactory: CodexAdapterV2.CodexAppServerClientFactoryShape = {
         open: (openInput) =>
-          Layer.build(CodexReplay.layerReplay(transcript)).pipe(
+          Layer.build(
+            driver === undefined
+              ? CodexReplay.layerReplay(transcript)
+              : CodexReplay.layerReplayWithDriver(driver),
+          ).pipe(
             Effect.mapError(
               (cause) =>
                 new ProviderAdapter.ProviderAdapterOpenSessionError({
@@ -909,9 +922,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   (client) =>
                     ({
                       ...client,
-                      request: (method, params) =>
+                      request: (method, params, requestOptions) =>
                         onRequest(method, params).pipe(
-                          Effect.andThen(client.request(method, params)),
+                          Effect.andThen(client.request(method, params, requestOptions)),
                         ),
                     }) satisfies CodexClient.CodexAppServerClient["Service"],
                 ),
@@ -1228,6 +1241,198 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         }).pipe(Effect.provide(CodexReplay.layerReplayWithDriver(driver)));
       }
     }).pipe(Effect.scoped),
+  );
+
+  it.effect.each(["accepted", "queued", "rejected", "eight"] as const)(
+    "overseer: native start receipt requires a matching response (%s)",
+    (outcome) =>
+      Effect.gen(function* () {
+        const gate = yield* OverseerGate.OverseerGate;
+        const nativeThreadId = "overseer-start-thread";
+        const nativeTurnId = "overseer-start-turn";
+        const prompt = wakeExample(outcome === "eight" ? 8 : 1).text;
+        const preamble = codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt });
+        const atResponse = yield* Deferred.make<void>();
+        const releaseResponse = yield* Deferred.make<void>();
+        const running = yield* Deferred.make<void>();
+        const receipt = yield* Deferred.make<void>();
+        let admissions = 0;
+        const harness = yield* makeCodexReplayHarness(
+          makeCodexReplayTranscript({
+            scenario: `overseer-start-${outcome}`,
+            entries: [
+              ...preamble.slice(0, -2),
+              ...(outcome === "accepted" ? [preamble.at(-1)!] : []),
+              {
+                type: "emit_inbound",
+                label: "matching-response",
+                frame:
+                  outcome === "rejected"
+                    ? { id: 3, error: { code: -32603, message: "Rejected input" } }
+                    : {
+                        id: 3,
+                        result: {
+                          turn: {
+                            ...makeCodexReplayTurn({ id: nativeTurnId, status: "inProgress" }),
+                            ...(outcome === "queued" ? { startedAt: null } : {}),
+                          },
+                        },
+                      },
+              },
+            ],
+          }),
+          (event) =>
+            event.type === "provider_turn.updated" && event.providerTurn.status === "running"
+              ? Deferred.succeed(running, undefined)
+              : Effect.void,
+          undefined,
+          undefined,
+          (entry) =>
+            entry.label === "matching-response"
+              ? Deferred.succeed(atResponse, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseResponse)),
+                )
+              : Effect.void,
+        );
+        const input = makeCodexTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("overseer-start"),
+          text: prompt,
+        });
+        const started = yield* harness.runtime
+          .startTurn({
+            ...input,
+            message: { ...input.message, messageId: MessageId.make("message:overseer:test") },
+          })
+          .pipe(
+            Effect.provideService(OverseerNative.Observer, {
+              handoff: (_uuid, send) =>
+                Effect.sync(() => {
+                  admissions++;
+                }).pipe(Effect.andThen(gate.handoff(Effect.succeed(true), send))),
+              received: () => Deferred.succeed(receipt, undefined).pipe(Effect.asVoid),
+            }),
+            Effect.exit,
+            Effect.forkScoped,
+          );
+        yield* Deferred.await(atResponse);
+        if (outcome === "accepted") yield* Deferred.await(running);
+        yield* gate.commit(Effect.void);
+        assert.equal(admissions, 1);
+        assert.isFalse(yield* Deferred.isDone(receipt));
+        yield* Deferred.succeed(releaseResponse, undefined);
+        assert.equal(
+          (yield* Fiber.join(started))._tag,
+          outcome === "rejected" ? "Failure" : "Success",
+        );
+        assert.equal(yield* Deferred.isDone(receipt), outcome !== "rejected");
+      }).pipe(
+        Effect.scoped,
+        Effect.provideService(OverseerFeature.Enabled, true),
+        Effect.provide(
+          Layer.mergeAll(
+            OverseerGate.layer,
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            NodeServices.layer,
+          ),
+        ),
+      ),
+  );
+
+  it.effect.each(["accepted", "rejected"] as const)(
+    "overseer: native steer receipt requires a matching response (%s)",
+    (outcome) =>
+      Effect.gen(function* () {
+        const nativeThreadId = "overseer-steer-thread";
+        const nativeTurnId = "overseer-steer-turn";
+        const prompt = "Check the workspace.";
+        const atResponse = yield* Deferred.make<void>();
+        const releaseResponse = yield* Deferred.make<void>();
+        const receipt = yield* Deferred.make<void>();
+        const harness = yield* makeCodexReplayHarness(
+          makeCodexReplayTranscript({
+            scenario: `overseer-steer-${outcome}`,
+            entries: [
+              ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt }),
+              {
+                type: "expect_outbound",
+                frame: {
+                  id: 4,
+                  method: "turn/steer",
+                  params: {
+                    threadId: nativeThreadId,
+                    expectedTurnId: nativeTurnId,
+                    input: [{ type: "text", text: "Follow-up fact." }],
+                  },
+                },
+              },
+              {
+                type: "emit_inbound",
+                label: "matching-response",
+                frame:
+                  outcome === "accepted"
+                    ? { id: 4, result: { turnId: nativeTurnId } }
+                    : { id: 4, error: { code: -32603, message: "Rejected steer" } },
+              },
+            ],
+          }),
+          undefined,
+          undefined,
+          undefined,
+          (entry) =>
+            entry.label === "matching-response"
+              ? Deferred.succeed(atResponse, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseResponse)),
+                )
+              : Effect.void,
+        );
+        const input = makeCodexTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("overseer-steer"),
+          text: prompt,
+        });
+        yield* harness.runtime.startTurn(input);
+        const providerTurnId = (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
+          driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+          nativeTurnId,
+        });
+        const steered = yield* harness.runtime
+          .steerTurn({
+            ...input,
+            providerTurnId,
+            message: {
+              ...input.message,
+              messageId: MessageId.make("message:overseer:steer"),
+              text: "Follow-up fact.",
+            },
+          })
+          .pipe(
+            Effect.provideService(OverseerNative.Observer, {
+              handoff: (_uuid, send) => send(Effect.void).pipe(Effect.asSome),
+              received: () => Deferred.succeed(receipt, undefined).pipe(Effect.asVoid),
+            }),
+            Effect.exit,
+            Effect.forkScoped,
+          );
+        yield* Deferred.await(atResponse);
+        assert.isFalse(yield* Deferred.isDone(receipt));
+        yield* Deferred.succeed(releaseResponse, undefined);
+        assert.equal(
+          (yield* Fiber.join(steered))._tag,
+          outcome === "accepted" ? "Success" : "Failure",
+        );
+        assert.equal(yield* Deferred.isDone(receipt), outcome === "accepted");
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
   );
 
   it.effect("waits for native start before interrupting an acknowledged queued turn", () =>
