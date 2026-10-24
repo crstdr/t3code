@@ -8,9 +8,9 @@ import {
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
-import { requestGuarded, subscribe } from "./client.ts";
+import { requestGuarded, subscribe, subscribeDynamic } from "./client.ts";
 
-// A cold-load subscription may precede the session; wait on the connected config stream.
+// Commands may precede the session; wait on the connected config stream.
 const supported = subscribe(WS_METHODS.subscribeServerConfig, {}).pipe(
   Stream.filter((event) => event.type === "snapshot"),
   Stream.map((event) => event.config.environment.capabilities.threadOversight === true),
@@ -19,12 +19,13 @@ const supported = subscribe(WS_METHODS.subscribeServerConfig, {}).pipe(
   Effect.mapError(() => new OversightError({ reason: "unavailable" })),
 );
 export const watch = (input: OversightWatchInput) =>
-  Stream.unwrap(
-    supported.pipe(
-      Effect.map((enabled) =>
-        enabled
-          ? subscribe(WS_METHODS.oversightWatch, input)
-          : Stream.fail(new OversightError({ reason: "unsupported" })),
+  subscribeDynamic(WS_METHODS.oversightWatch, (session) =>
+    session.initialConfig.pipe(
+      Effect.mapError(() => new OversightError({ reason: "unavailable" })),
+      Effect.flatMap((config) =>
+        config.environment.capabilities.threadOversight === true
+          ? Effect.succeed(input)
+          : Effect.fail(new OversightError({ reason: "unsupported" })),
       ),
     ),
   );

@@ -1,6 +1,7 @@
 import { it, expect } from "@effect/vitest";
 import {
   EnvironmentId,
+  OversightError,
   ThreadId,
   WS_METHODS,
   type ServerConfig,
@@ -36,19 +37,21 @@ const PREFERENCES: OversightPreferences = {
   idleMinutes: 30,
 };
 
-const makeHarness = Effect.fn("TestOverseer.makeHarness")(function* () {
+const makeHarness = Effect.fn("TestOverseer.makeHarness")(function* (
+  watchFailure?: OversightError,
+) {
   const activeSession = yield* SubscriptionRef.make<Option.Option<RpcSession>>(Option.none());
   const state = yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE);
   const prepared = yield* SubscriptionRef.make<Option.Option<PreparedConnection>>(Option.none());
   const configReady = yield* Deferred.make<ServerConfig>();
   const calls: string[] = [];
   const requests: Array<{ readonly tag: string; readonly input: unknown }> = [];
-  const configSubscribed = yield* Deferred.make<void>();
+  const configRequested = yield* Deferred.make<void>();
   const client = {
     [WS_METHODS.oversightWatch]: (input: OversightWatchInput) => {
       calls.push("watch");
       requests.push({ tag: WS_METHODS.oversightWatch, input });
-      return Stream.make(PAGE);
+      return watchFailure ? Stream.fail(watchFailure) : Stream.make(PAGE);
     },
     [WS_METHODS.oversightUnlink]: (input: OversightUnlinkInput) =>
       Effect.sync(() => {
@@ -63,15 +66,14 @@ const makeHarness = Effect.fn("TestOverseer.makeHarness")(function* () {
         return { ...PREFERENCES, ...input.preferences };
       }),
   } as unknown as WsRpcProtocolClient;
+  const initialConfig = Deferred.succeed(configRequested, undefined).pipe(
+    Effect.andThen(Deferred.await(configReady)),
+  );
   const session: RpcSession = {
     client,
-    initialConfig: Deferred.await(configReady),
+    initialConfig,
     subscribeServerConfig: () =>
-      Stream.fromEffect(
-        Deferred.succeed(configSubscribed, undefined).pipe(
-          Effect.andThen(Deferred.await(configReady)),
-        ),
-      ).pipe(
+      Stream.fromEffect(initialConfig).pipe(
         Stream.map((config) => ({ version: 1 as const, type: "snapshot" as const, config })),
         Stream.concat(Stream.never),
       ),
@@ -106,7 +108,7 @@ const makeHarness = Effect.fn("TestOverseer.makeHarness")(function* () {
     });
   const connect = (capability: boolean | undefined) =>
     ready(capability).pipe(Effect.andThen(publishSession));
-  return { supervisor, calls, requests, connect, publishSession, ready, configSubscribed };
+  return { supervisor, calls, requests, connect, publishSession, ready, configRequested };
 });
 
 it.effect("establishes watch after cold-load session readiness without a manual retry", () =>
@@ -132,7 +134,7 @@ it.effect("establishes watch after cold-load session readiness without a manual 
 
 it.effect("waits for the connected config snapshot before establishing watch", () =>
   Effect.gen(function* () {
-    const { supervisor, calls, publishSession, ready, configSubscribed } = yield* makeHarness();
+    const { supervisor, calls, publishSession, ready, configRequested } = yield* makeHarness();
     yield* publishSession;
     yield* Effect.gen(function* () {
       const watching = yield* Overseer.watch({ threadId: ThreadId.make("thread") }).pipe(
@@ -140,7 +142,7 @@ it.effect("waits for the connected config snapshot before establishing watch", (
         Stream.runCollect,
         Effect.forkChild,
       );
-      yield* Deferred.await(configSubscribed);
+      yield* Deferred.await(configRequested);
       expect(calls).toEqual([]);
       yield* ready(true);
       expect(yield* Fiber.join(watching)).toEqual([PAGE]);
@@ -164,6 +166,61 @@ it.effect("still refuses an unguarded unlink after waiting for session readiness
       });
       expect(calls).toEqual([]);
     }).pipe(Effect.provideService(EnvironmentSupervisor, supervisor));
+  }),
+);
+
+it.effect.each([undefined, false])(
+  "refuses watch RPCs when a replacement session has threadOversight=%s",
+  (capability) =>
+    Effect.gen(function* () {
+      const first = yield* makeHarness();
+      const next = yield* makeHarness(new OversightError({ reason: "unsupported" }));
+      yield* first.connect(true);
+      yield* next.connect(capability);
+      const firstFrame = yield* Deferred.make<void>();
+      yield* Effect.gen(function* () {
+        const watching = yield* Overseer.watch({ threadId: ThreadId.make("thread") }).pipe(
+          Stream.tap(() => Deferred.succeed(firstFrame, undefined)),
+          Stream.runDrain,
+          Effect.flip,
+          Effect.forkChild,
+        );
+        yield* Deferred.await(firstFrame);
+        yield* SubscriptionRef.set(
+          first.supervisor.session,
+          yield* SubscriptionRef.get(next.supervisor.session),
+        );
+        expect(yield* Fiber.join(watching)).toMatchObject({ reason: "unsupported" });
+        expect(first.calls).toEqual(["watch"]);
+        expect(next.requests).toEqual([]);
+      }).pipe(Effect.provideService(EnvironmentSupervisor, first.supervisor));
+    }),
+);
+
+it.effect("reestablishes watch on a supported replacement session", () =>
+  Effect.gen(function* () {
+    const first = yield* makeHarness();
+    const next = yield* makeHarness();
+    yield* first.connect(true);
+    yield* next.connect(true);
+    const firstFrame = yield* Deferred.make<void>();
+    yield* Effect.gen(function* () {
+      const watching = yield* Overseer.watch({ threadId: ThreadId.make("thread") }).pipe(
+        Stream.tap(() => Deferred.succeed(firstFrame, undefined)),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* Deferred.await(firstFrame);
+      yield* SubscriptionRef.set(first.supervisor.session, Option.none());
+      yield* SubscriptionRef.set(
+        first.supervisor.session,
+        yield* SubscriptionRef.get(next.supervisor.session),
+      );
+      expect(yield* Fiber.join(watching)).toEqual([PAGE, PAGE]);
+      expect(first.calls).toEqual(["watch"]);
+      expect(next.calls).toEqual(["watch"]);
+    }).pipe(Effect.provideService(EnvironmentSupervisor, first.supervisor));
   }),
 );
 
@@ -237,7 +294,7 @@ it.effect("supported servers get the exact feature tags and payloads after readi
 
 it.effect("configure waits for the session and its first config snapshot", () =>
   Effect.gen(function* () {
-    const { supervisor, calls, publishSession, ready, configSubscribed } = yield* makeHarness();
+    const { supervisor, calls, publishSession, ready, configRequested } = yield* makeHarness();
     yield* Effect.gen(function* () {
       const configuring = yield* Overseer.configure({
         threadId: ThreadId.make("thread"),
@@ -245,7 +302,7 @@ it.effect("configure waits for the session and its first config snapshot", () =>
       }).pipe(Effect.forkChild({ startImmediately: true }));
       expect(calls).toEqual([]);
       yield* publishSession;
-      yield* Deferred.await(configSubscribed);
+      yield* Deferred.await(configRequested);
       expect(calls).toEqual([]);
       yield* ready(true);
       expect(yield* Fiber.join(configuring)).toEqual({ ...PREFERENCES, idleEnabled: true });
