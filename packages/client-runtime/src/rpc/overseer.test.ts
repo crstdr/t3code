@@ -25,7 +25,12 @@ import {
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import type { WsRpcProtocolClient } from "./protocol.ts";
 import type { RpcSession } from "./session.ts";
-import { RpcPermissionGuard, getInitialServerConfig } from "./client.ts";
+import {
+  EnvironmentRpcSubscriptionObserver,
+  EnvironmentRpcRequestObserver,
+  RpcPermissionGuard,
+  getInitialServerConfig,
+} from "./client.ts";
 import * as Overseer from "./overseer.ts";
 
 const PAGE: OversightWatchFrame = { revision: 1, links: [] };
@@ -312,6 +317,157 @@ it.effect("configure waits for the session and its first config snapshot", () =>
       Effect.provideService(RpcPermissionGuard, { authorize: () => Effect.void }),
     );
   }),
+);
+
+it.effect.each(
+  (["unlink", "configure"] as const).flatMap((operation) => [
+    { operation, capability: undefined, guarded: true },
+    { operation, capability: false, guarded: true },
+    { operation, capability: true, guarded: true },
+    { operation, capability: undefined, guarded: false },
+  ]),
+)(
+  "validates unary replacement session $operation capability=$capability guarded=$guarded",
+  ({ operation, capability, guarded }) =>
+    Effect.gen(function* () {
+      const first = yield* makeHarness();
+      const next = yield* makeHarness();
+      yield* first.connect(true);
+      yield* next.connect(capability);
+      const snapshotClosed = yield* Deferred.make<void>();
+      const releaseSnapshot = yield* Deferred.make<void>();
+      const authorizations: Array<{
+        environmentId: EnvironmentId;
+        method: string;
+        input: unknown;
+      }> = [];
+      const input =
+        operation === "unlink"
+          ? { linkId: "link" }
+          : { threadId: ThreadId.make("thread"), preferences: { idleEnabled: true } };
+      const command =
+        operation === "unlink"
+          ? Overseer.unlink({ linkId: "link" }).pipe(Effect.asVoid)
+          : Overseer.configure({
+              threadId: ThreadId.make("thread"),
+              preferences: { idleEnabled: true },
+            }).pipe(Effect.asVoid);
+      let running = command.pipe(
+        Effect.result,
+        Effect.forkChild,
+        Effect.provideService(EnvironmentSupervisor, first.supervisor),
+        Effect.provideService(EnvironmentRpcSubscriptionObserver, {
+          observe: () =>
+            Effect.succeed(
+              Deferred.succeed(snapshotClosed, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseSnapshot)),
+              ),
+            ),
+        }),
+      );
+      if (guarded) {
+        running = running.pipe(
+          Effect.provideService(RpcPermissionGuard, {
+            authorize: (environmentId, method, input) =>
+              Effect.sync(() => {
+                authorizations.push({ environmentId, method, input });
+              }),
+          }),
+        );
+      }
+      const pending = yield* running;
+      yield* Deferred.await(snapshotClosed);
+      yield* SubscriptionRef.set(
+        first.supervisor.session,
+        yield* SubscriptionRef.get(next.supervisor.session),
+      );
+      yield* Deferred.succeed(releaseSnapshot, undefined);
+      const result = yield* Fiber.join(pending);
+      expect(first.requests).toEqual([]);
+      expect(yield* Deferred.isDone(next.configRequested)).toBe(guarded);
+      if (!guarded) {
+        expect(result).toMatchObject({
+          _tag: "Failure",
+          failure: {
+            _tag: "EnvironmentAuthorizationError",
+            requiredScope: "orchestration:operate",
+          },
+        });
+        expect(next.requests).toEqual([]);
+        return;
+      }
+      expect(authorizations).toEqual([
+        {
+          environmentId: EnvironmentId.make("environment-1"),
+          method:
+            operation === "unlink" ? WS_METHODS.oversightUnlink : WS_METHODS.oversightConfigure,
+          input,
+        },
+      ]);
+      if (capability === true) {
+        expect(next.requests).toEqual([{ tag: authorizations[0]?.method, input }]);
+        expect(result).toMatchObject({ _tag: "Success" });
+      } else {
+        expect(next.requests).toEqual([]);
+        expect(result).toMatchObject({
+          _tag: "Failure",
+          failure: { _tag: "OversightError", reason: "unsupported" },
+        });
+      }
+    }),
+);
+
+it.effect.each(["unlink", "configure"] as const)(
+  "keeps %s on its captured session while authorization awaits and cleans up observation",
+  (operation) =>
+    Effect.gen(function* () {
+      const first = yield* makeHarness();
+      const next = yield* makeHarness();
+      yield* first.connect(true);
+      yield* next.connect(false);
+      const authorizing = yield* Deferred.make<void>();
+      const releaseAuthorization = yield* Deferred.make<void>();
+      const observations: string[] = [];
+      const command =
+        operation === "unlink"
+          ? Overseer.unlink({ linkId: "link" }).pipe(Effect.asVoid)
+          : Overseer.configure({
+              threadId: ThreadId.make("thread"),
+              preferences: { idleEnabled: true },
+            }).pipe(Effect.asVoid);
+      const pending = yield* command.pipe(
+        Effect.forkChild,
+        Effect.provideService(EnvironmentSupervisor, first.supervisor),
+        Effect.provideService(RpcPermissionGuard, {
+          authorize: () =>
+            Deferred.succeed(authorizing, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseAuthorization)),
+            ),
+        }),
+        Effect.provideService(EnvironmentRpcRequestObserver, {
+          observe: ({ method }) =>
+            Effect.sync(() => {
+              observations.push(method);
+              return Effect.sync(() => {
+                observations.push("complete");
+              });
+            }),
+        }),
+      );
+      yield* Deferred.await(authorizing);
+      yield* SubscriptionRef.set(
+        first.supervisor.session,
+        yield* SubscriptionRef.get(next.supervisor.session),
+      );
+      yield* Deferred.succeed(releaseAuthorization, undefined);
+      yield* Fiber.join(pending);
+      expect(first.calls).toEqual([operation]);
+      expect(next.requests).toEqual([]);
+      expect(observations).toEqual([
+        operation === "unlink" ? WS_METHODS.oversightUnlink : WS_METHODS.oversightConfigure,
+        "complete",
+      ]);
+    }),
 );
 
 it.effect("still refuses an unguarded configure after waiting for session readiness", () =>
