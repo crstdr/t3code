@@ -21,6 +21,13 @@ import {
   ChatGptHandoffInput,
   ChatGptHandoffState,
 } from "./providerSetup.ts";
+import {
+  OversightWatchInput,
+  OversightWatchFrame,
+  OversightUnlinkInput,
+  OversightUnlinkResult,
+  OversightError,
+} from "./overseer.ts";
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
@@ -378,6 +385,8 @@ import { VcsError } from "./vcs.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 
 export const WS_METHODS = {
+  oversightWatch: "oversight.watch",
+  oversightUnlink: "oversight.unlink",
   projectsList: "projects.list",
   projectsAdd: "projects.add",
   projectsRemove: "projects.remove",
@@ -1879,7 +1888,21 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
   { error: EnvironmentAuthorizationError },
 ) {}
 
+const WsOversightWatchRpc = Rpc.make(WS_METHODS.oversightWatch, {
+  payload: OversightWatchInput,
+  success: OversightWatchFrame,
+  stream: true,
+  error: Schema.Union([OversightError, EnvironmentAuthorizationError]),
+});
+const WsOversightUnlinkRpc = Rpc.make(WS_METHODS.oversightUnlink, {
+  payload: OversightUnlinkInput,
+  success: OversightUnlinkResult,
+  error: Schema.Union([OversightError, EnvironmentAuthorizationError]),
+});
+
 export const WsRpcGroup = RpcGroup.make(
+  WsOversightWatchRpc,
+  WsOversightUnlinkRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,

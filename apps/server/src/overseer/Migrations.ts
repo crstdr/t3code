@@ -6,6 +6,7 @@ import WakeFacts from "./WakeFactsMigration.ts";
 import Mailbox from "./MailboxMigration.ts";
 import Recovery from "./RecoveryMigration.ts";
 import WakeControls from "./WakeControlsMigration.ts";
+import Api from "./ApiMigration.ts";
 
 const run = Migrator.make({});
 const loader = Migrator.fromRecord({
@@ -14,6 +15,7 @@ const loader = Migrator.fromRecord({
   "3_Mailbox": Mailbox,
   "4_Recovery": Recovery,
   "5_WakeControls": WakeControls,
+  "6_Api": Api,
 });
 
 // A fork must not consume upstream's migration IDs or leave its manifest divergent.

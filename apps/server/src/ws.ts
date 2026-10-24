@@ -1,4 +1,6 @@
-import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
+import * as OverseerService from "./overseer/OverseerService.ts";
+import * as OverseerFeature from "./overseer/OverseerFeature.ts";
+import { OversightError, OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
@@ -548,6 +550,7 @@ const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
 // Middleware added later wraps middleware added earlier, so instrumentation wraps authorization.
 const ServerWsRpcGroup = WsRpcGroup.middleware(RpcInstrumentation);
+const DisabledServerWsRpcGroup = ServerWsRpcGroup.omit(...OverseerFeature.rpcTags);
 
 // RpcGroup.toLayer derives each handler's requirements by scanning every RPC in
 // the group, so its type cost grows with handlers × RPCs. Near 200 methods that
@@ -1843,7 +1846,16 @@ export const layerWsRpc = (
         return result;
       });
 
+      const oversight = yield* Effect.serviceOption(OverseerService.OverseerService);
       const handlers = ServerWsRpcGroup.of({
+        [WS_METHODS.oversightWatch]: (input) =>
+          Option.isSome(oversight)
+            ? oversight.value.watch(input)
+            : Stream.fail(new OversightError({ reason: "unsupported" })),
+        [WS_METHODS.oversightUnlink]: (input) =>
+          Option.isSome(oversight)
+            ? oversight.value.unlink(input)
+            : Effect.fail(new OversightError({ reason: "unsupported" })),
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           Effect.annotateCurrentSpan({
             "orchestration_v2.command_id": command.commandId,
@@ -3225,7 +3237,11 @@ export const layer = Layer.unwrap(
         yield* analytics.recordOwners(readClientOwners(request), "client");
         const rpcWebSocketHttpEffect = yield* Effect.gen(function* () {
           const { protocol, httpEffect } = yield* RpcServer.makeProtocolWithHttpEffectWebsocket;
-          yield* RpcServer.make(ServerWsRpcGroup, WS_RPC_SERVER_OPTIONS).pipe(
+          const enabled = yield* OverseerFeature.Enabled;
+          const serve = enabled
+            ? RpcServer.make(ServerWsRpcGroup, WS_RPC_SERVER_OPTIONS)
+            : RpcServer.make(DisabledServerWsRpcGroup, WS_RPC_SERVER_OPTIONS);
+          yield* serve.pipe(
             Effect.provideService(RpcServer.Protocol, withTerminalOutputWindow(protocol)),
             Effect.provide(
               Layer.merge(

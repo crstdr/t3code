@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
+import { EnvironmentId, ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
@@ -19,6 +19,9 @@ import {
 } from "../cloud/config.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "./ServerEnvironment.ts";
+import * as UpstreamEnvironment from "./ServerEnvironment.upstream.testkit.ts";
+import * as OverseerFeature from "../overseer/OverseerFeature.ts";
+import * as ProcessRunner from "../processRunner.ts";
 
 const layerServerEnvironment = (baseDir: string) =>
   ServerEnvironment.layer.pipe(
@@ -74,11 +77,45 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
 });
 
 it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
+  it.effect(
+    "disabled descriptor bytes equal upstream; enabled adds only the optional oversight capability",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.makeTempDirectoryScoped();
+        const deps = Layer.mergeAll(
+          layerEmptySecretStore,
+          ProcessRunner.layer,
+          Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
+            getEnvironmentId: Effect.succeed(EnvironmentId.make("descriptor-fixture")),
+          }),
+          ServerConfig.layerTest(process.cwd(), baseDir),
+        );
+        const upstream = yield* UpstreamEnvironment.make.pipe(
+          Effect.flatMap((service) => service.getDescriptor),
+          Effect.provide(deps),
+        );
+        const current = yield* ServerEnvironment.make.pipe(
+          Effect.flatMap((service) => service.getDescriptor),
+          Effect.provide(deps),
+        );
+        expect(JSON.stringify(current)).toBe(JSON.stringify(upstream));
+        expect(current.capabilities).not.toHaveProperty("threadOversight");
+        const enabled = yield* ServerEnvironment.make.pipe(
+          Effect.flatMap((service) => service.getDescriptor),
+          Effect.provideService(OverseerFeature.Enabled, true),
+          Effect.provide(deps),
+        );
+        expect(enabled.capabilities.threadOversight).toBe(true);
+        const { threadOversight: _capability, ...capabilities } = enabled.capabilities;
+        expect({ ...enabled, capabilities }).toEqual(upstream);
+      }),
+  );
   it.effect("publishes proven install ownership only for manually updated servers", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const baseDir = yield* fs.makeTempDirectoryScoped();
-      const prefix = `${baseDir}/node`;
+      const prefix = `${yield* fs.realPath(baseDir)}/node`;
       const entry = `${prefix}/lib/node_modules/t3/dist/bin.mjs`;
       yield* fs.makeDirectory(`${prefix}/lib/node_modules/t3/dist`, { recursive: true });
       yield* fs.makeDirectory(`${prefix}/bin`, { recursive: true });

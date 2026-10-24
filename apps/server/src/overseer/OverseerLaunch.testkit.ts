@@ -38,8 +38,11 @@ import * as Harness from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import { ClaudeProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as Store from "./OverseerStore.ts";
+import * as Gate from "./OverseerGate.ts";
 import * as Saga from "./OverseerLaunchService.ts";
 import * as Feature from "./OverseerFeature.ts";
+import * as Service from "./OverseerService.ts";
+import * as Environment from "../environment/ServerEnvironment.ts";
 
 const projectA = ProjectId.make("project:a");
 export const projectB = ProjectId.make("project:b");
@@ -65,6 +68,7 @@ export const request = {
 } as const;
 
 interface Options {
+  readonly environmentId?: EnvironmentId;
   readonly database?: ReturnType<typeof Sqlite.layerFromPath>;
   readonly config?: ServerConfig.ServerConfig["Service"];
   readonly worktreeCreated?: Effect.Effect<void>;
@@ -291,7 +295,13 @@ export function harness(options: Options = {}) {
     Layer.provide(NodeServices.layer),
     Layer.provide(NodeCrypto.layer),
   );
-  return Layer.mergeAll(saga, dependencies, runtime).pipe(Layer.provideMerge(NodeServices.layer));
+  const identity = Layer.succeed(Environment.ServerEnvironmentIdentity, {
+    getEnvironmentId: Effect.succeed(options.environmentId ?? invocation.environmentId),
+  });
+  const service = Service.layer.pipe(Layer.provide(Layer.mergeAll(saga, dependencies, identity)));
+  return Layer.mergeAll(service, saga, dependencies, runtime, Gate.layer).pipe(
+    Layer.provideMerge(NodeServices.layer),
+  );
 }
 
 export const setup = Effect.fn("test.overseer.setup")(function* (modelSelection = selection) {

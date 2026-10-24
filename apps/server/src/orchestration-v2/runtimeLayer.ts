@@ -49,6 +49,7 @@ import * as RuntimePolicy from "./RuntimePolicy.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as OverseerLaunch from "../overseer/OverseerLaunchService.ts";
+import * as OverseerService from "../overseer/OverseerService.ts";
 import * as OverseerStore from "../overseer/OverseerStore.ts";
 import * as OverseerWakeFacts from "../overseer/OverseerWakeFacts.ts";
 import * as OverseerMailbox from "../overseer/OverseerMailbox.ts";
@@ -398,6 +399,15 @@ export const layerProduction = Layer.mergeAll(
   layerManagedProjectFoldersProvided,
   layerThreadLaunchProvided,
   layerOverseerLaunchProvided,
+  OverseerService.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        layerOverseerLaunchProvided,
+        OverseerStore.layer,
+        layerThreadManagementProvided,
+      ),
+    ),
+  ),
   OverseerPreferences.layer,
   OverseerIdleScheduler.layerWorker,
   OverseerRecovery.layer.pipe(
