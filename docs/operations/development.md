@@ -78,6 +78,10 @@ Read ports from the `[dev-runner]` output. Worktrees derive stable preferences f
 but occupied ports can shift them. `T3CODE_PORT_OFFSET` or `T3CODE_DEV_INSTANCE` can select a
 different preference when needed.
 
+### Experimental oversight
+
+Thread oversight is experimental and default off. Set `T3CODE_OVERSEER_ENABLED=true` in the server process environment before startup (for example, `T3CODE_OVERSEER_ENABLED=true vp run dev --home-dir /tmp/t3code-overseer --no-seed`). Restart with the variable unset or `false` to disable it; ordinary threads remain usable, but oversight delivery and link APIs are unavailable while disabled. Unrecognized boolean values fail startup. Use a disposable data directory for testing.
+
 ### Sharing and remote debugging
 
 `vp run dev --share` publishes the web port over the machine's tailnet and prints a pairing URL
