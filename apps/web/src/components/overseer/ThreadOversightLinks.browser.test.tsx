@@ -1,6 +1,9 @@
 import { RegistryContext } from "@effect/atom-react";
-import { useRef, useState, type ReactNode } from "react";
-import { CommandDialog, CommandDialogPopup } from "../ui/command";
+import { useImperativeHandle, useRef, type ReactNode } from "react";
+import { CommandPalette } from "../CommandPalette";
+import type { ChatComposerHandle } from "../chat/ChatComposer";
+import { useComposerHandleContext } from "../../composerHandleContext";
+import { openCommandPalette } from "../../commandPaletteBus";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   EnvironmentId,
@@ -27,6 +30,8 @@ const state = vi.hoisted(() => ({
   watch: vi.fn(),
   unlink: vi.fn(),
   configure: vi.fn(),
+  unexpectedCommand: vi.fn(),
+  restoredFocus: vi.fn(),
 }));
 const key = (environment: string, cursor?: string) => `${environment}:${cursor ?? "first"}`;
 vi.mock("../../state/entities", () => ({
@@ -39,6 +44,9 @@ vi.mock("../../state/entities", () => ({
         },
       ]),
     ),
+  useProjects: () => [],
+  useThreadShells: () => [],
+  waitForProject: state.unexpectedCommand,
   useProject: (ref: { environmentId: string; projectId: string }) => ({
     title: `${ref.environmentId} ${ref.projectId === "project:b" ? "Project B" : "Project A"}`,
   }),
@@ -61,8 +69,91 @@ vi.mock("../../state/overseer", () => ({
 }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: { kind: string }) =>
-    command.kind === "unlink" ? state.unlink : state.configure,
+    command.kind === "unlink"
+      ? state.unlink
+      : command.kind === "configure"
+        ? state.configure
+        : state.unexpectedCommand,
 }));
+vi.mock("../../hooks/useHandleNewThread", () => ({
+  useHandleNewThread: () => ({
+    activeThread: { environmentId, id: threadId, projectId: ProjectId.make("project:a") },
+    activeDraftThread: null,
+    defaultProjectRef: null,
+    handleNewThread: state.unexpectedCommand,
+  }),
+}));
+vi.mock("../../hooks/useThreadRouteTarget", () => ({
+  useThreadRouteTarget: () => ({
+    kind: "server",
+    threadRef: scopeThreadRef(environmentId, threadId),
+  }),
+}));
+vi.mock("../../hooks/useOpenPanelPullRequestUrl", () => ({
+  useOpenPanelPullRequestUrl: () => null,
+}));
+vi.mock("../../hooks/useSettings", () => ({
+  useClientSettings: () => ({ confirmThreadDelete: true, projectSortOrder: "name" }),
+}));
+vi.mock("../../hooks/useTheme", () => ({
+  useTheme: () => ({ theme: "default", resolvedTheme: "light", appearanceMode: "light" }),
+}));
+vi.mock("../../hooks/useScratchProject", () => ({
+  useScratchProject: () => ({ scratchEnvironmentId: () => null }),
+}));
+vi.mock("../../hooks/useNewProject", () => ({ useNewProject: () => state.unexpectedCommand }));
+vi.mock("../../state/environments", () => ({
+  useEnvironments: () => ({ environments: [] }),
+  usePrimaryEnvironmentId: () => environmentId,
+  useEnvironmentProviders: () => new Map(),
+}));
+vi.mock("../../connection/useDesktopLocalBootstraps", () => ({
+  useDesktopLocalBootstraps: () => [],
+}));
+vi.mock("../../state/use-atom-query-runner", () => ({
+  useAtomQueryRunner: () => state.unexpectedCommand,
+}));
+vi.mock("../settings/useAvailableSettingsSearchItems", () => ({
+  useAvailableSettingsSearchItems: () => [],
+}));
+vi.mock("../CommandPaletteLookups", () => ({
+  selectCommandPaletteClientSettings: () => ({}),
+  useEnvironmentLookups: () => ({
+    environmentLabelById: new Map(),
+    projectEnvironmentLocationById: new Map(),
+  }),
+  useProjectLookups: () => ({
+    projectCwdById: new Map(),
+    projectByKey: new Map(),
+    projectTitleById: new Map(),
+  }),
+  useSortedProjectGroups: () => [],
+}));
+vi.mock("../CommandPaletteThreadItems", () => ({
+  useCommandPaletteThreadItems: () => ({ threadItems: [], isSearchPending: false }),
+}));
+vi.mock("../CommandPaletteThemeItems", () => ({
+  APPEARANCE_OPTIONS: [],
+  notifyThemeSaveFailure: state.unexpectedCommand,
+  useCommandPaletteThemeItems: () => {
+    const item = (title: string) => ({
+      kind: "action",
+      value: title,
+      title,
+      searchTerms: [title],
+      icon: null,
+      run: state.unexpectedCommand,
+    });
+    return {
+      changeThemeItem: item("Theme"),
+      changeAppearanceItem: item("Appearance"),
+      themeEditorItem: item("Theme editor"),
+    };
+  },
+}));
+vi.mock("../files/ProjectFilePicker", () => ({ ProjectFilePicker: () => null }));
+vi.mock("../search/ProjectContentSearchDialog", () => ({ ProjectContentSearchDialog: () => null }));
+vi.mock("../pullRequest/LinkPullRequestDialog", () => ({ openLinkPullRequestDialog: () => {} }));
 import { ThreadOversightLinks } from "./ThreadOversightLinks";
 import { oversightPaletteItem } from "./paletteItem";
 
@@ -101,6 +192,8 @@ function setup(links: ReadonlyArray<OversightLink> = [link()]) {
   state.watch.mockReset();
   state.unlink.mockReset();
   state.configure.mockReset();
+  state.unexpectedCommand.mockReset();
+  state.restoredFocus.mockReset();
   const registry = AtomRegistry.make();
   const addPage = (environment: string, cursor: string | undefined, frame: OversightWatchFrame) => {
     const id = key(environment, cursor);
@@ -232,36 +325,38 @@ it("palette opens an empty panel only for the matching scoped thread", async () 
   await vi.waitFor(() => expect(page.getByText("No oversight links.").query()).toBeNull());
 });
 
-function PaletteFocusShell({ children }: { readonly children: ReactNode }) {
-  const [open, setOpen] = useState(false);
+function PaletteComposer({ children }: { readonly children: ReactNode }) {
+  const handle = useComposerHandleContext();
   const composer = useRef<HTMLInputElement>(null);
-  const item = oversightPaletteItem(scopeThreadRef(environmentId, threadId), {
-    threadOversight: true,
-  })!;
-  return (
-    <CommandDialog open={open} onOpenChange={setOpen}>
-      <div inert={open}>
-        {children}
-        <input aria-label="Composer" ref={composer} />
-        <button onClick={() => setOpen(true)}>Open palette</button>
-      </div>
-      <CommandDialogPopup
-        aria-label="Command palette"
-        finalFocus={() => {
+  useImperativeHandle(
+    handle,
+    () =>
+      ({
+        focusAtEnd: () => {
           composer.current?.focus();
-          return false;
-        }}
-      >
-        <button
-          onClick={() => {
-            setOpen(false);
-            void item.run();
-          }}
-        >
-          Show oversight links
-        </button>
-      </CommandDialogPopup>
-    </CommandDialog>
+          state.restoredFocus();
+        },
+        isModelPickerOpen: () => false,
+      }) satisfies Pick<
+        ChatComposerHandle,
+        "focusAtEnd" | "isModelPickerOpen"
+      > as ChatComposerHandle,
+    [],
+  );
+  return (
+    <>
+      {children}
+      <input aria-label="Composer" ref={composer} />
+      <button onClick={() => openCommandPalette()}>Open palette</button>
+    </>
+  );
+}
+
+function PaletteFocusShell({ children }: { readonly children: ReactNode }) {
+  return (
+    <CommandPalette>
+      <PaletteComposer>{children}</PaletteComposer>
+    </CommandPalette>
   );
 }
 
@@ -275,7 +370,7 @@ it("the palette modal can close and return composer focus without dismissing the
   await userEvent.click(
     page
       .getByRole("dialog", { name: "Command palette", exact: true })
-      .getByRole("button", { name: "Show oversight links" }),
+      .getByRole("option", { name: "Show oversight links" }),
   );
   await expect
     .element(page.getByRole("dialog", { name: "Oversight links", exact: true }))
@@ -284,7 +379,56 @@ it("the palette modal can close and return composer focus without dismissing the
   await expect
     .element(page.getByRole("switch", { name: "Auto-wake on all updates" }))
     .not.toBeChecked();
+  await userEvent.click(screen.getByRole("textbox", { name: "Composer" }));
+  await expect
+    .element(page.getByRole("dialog", { name: "Oversight links" }))
+    .not.toBeInTheDocument();
 });
+
+it.each([
+  ["pointer", "title"],
+  ["pointer", "cleared"],
+  ["pointer", "unfiltered"],
+  ["Enter", "title"],
+  ["Enter", "cleared"],
+  ["Enter", "unfiltered"],
+] as const)(
+  "production palette opens a linkless thread with %s in the %s view and keeps preferences absent",
+  async (selection, query) => {
+    using fixture = setup([]);
+    fixture.publish({ revision: 0, links: [] });
+    await using screen = await render(<PaletteFocusShell>{fixture.ui()}</PaletteFocusShell>);
+    expect(screen.getByRole("button", { name: "Show oversight links" }).query()).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Open palette", exact: true }));
+    const palette = page.getByRole("dialog", { name: "Command palette", exact: true });
+    const input = palette.getByRole("combobox");
+    if (query !== "unfiltered") await userEvent.fill(input, "Show oversight links");
+    if (query === "cleared") await userEvent.fill(input, "");
+    await expect.element(input).toHaveFocus();
+    await expect
+      .element(palette.getByRole("option", { name: "Show oversight links" }))
+      .toBeVisible();
+    if (selection === "pointer") {
+      await userEvent.click(palette.getByRole("option", { name: "Show oversight links" }));
+    } else {
+      await userEvent.keyboard("{Enter}");
+    }
+    await vi.waitFor(() => expect(state.restoredFocus).toHaveBeenCalledTimes(1));
+    await expect.element(palette).not.toBeInTheDocument();
+    await expect.element(page.getByText("No oversight links.")).toBeVisible();
+    expect(page.getByRole("switch").query()).toBeNull();
+    expect(state.configure).not.toHaveBeenCalled();
+    expect(state.unexpectedCommand).not.toHaveBeenCalled();
+    expect([...state.active]).toEqual([key(environmentId)]);
+    await expect
+      .element(screen.getByRole("button", { name: "Show oversight links" }))
+      .toBeVisible();
+    await expect.element(page.getByText("No oversight links.")).toBeVisible();
+    await userEvent.keyboard("{Escape}");
+    await expect.element(page.getByText("No oversight links.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show oversight links" }).query()).toBeNull();
+  },
+);
 
 it("pages without accumulating history and releases the extra page watch on close", async () => {
   using fixture = setup();

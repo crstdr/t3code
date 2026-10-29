@@ -12,7 +12,7 @@ export function oversightPaletteItem(
     kind: "action",
     value: "action:show-oversight-links",
     title: "Show oversight links",
-    searchTerms: ["oversight", "overseer", "worker", "links"],
+    searchTerms: ["oversight", "overseer", "worker", "links", "show oversight links"],
     icon: <LinkIcon className="size-4" />,
     run: async () => {
       showOversightLinks(ref);

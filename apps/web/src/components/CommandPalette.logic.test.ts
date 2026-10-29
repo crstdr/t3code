@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { oversightPaletteItem } from "./overseer/paletteItem";
 import type { Thread } from "../types";
 import { makeThreadFixture } from "../test-fixtures";
 import {
@@ -12,6 +14,60 @@ import {
   reduceCommandPaletteSearchState,
   type CommandPaletteUiState,
 } from "./CommandPalette.logic";
+
+describe("oversight palette discovery", () => {
+  it.each([
+    "Show oversight links",
+    "sHoW OvErSiGhT LiNkS",
+    "> Show oversight links",
+    "oversight",
+    "overseer",
+    "worker",
+    "links",
+  ])("finds the production oversight action for %s", (query) => {
+    const item = oversightPaletteItem(
+      scopeThreadRef(EnvironmentId.make("remote"), ThreadId.make("thread")),
+      { threadOversight: true },
+    )!;
+    const groups = filterCommandPaletteGroups({
+      activeGroups: [{ value: "actions", label: "Actions", items: [item] }],
+      query,
+      isInSubmenu: false,
+      projectSearchItems: [],
+      threadSearchItems: [],
+    });
+    expect(groups.flatMap((group) => group.items)).toEqual([item]);
+  });
+
+  it.each([
+    { query: "oversight", competitorTerm: "oversight tools", first: "oversight" },
+    { query: "links", competitorTerm: "related links", first: "competitor" },
+  ])("preserves the existing ordering for $query", ({ query, competitorTerm, first }) => {
+    const item = oversightPaletteItem(
+      scopeThreadRef(EnvironmentId.make("remote"), ThreadId.make("thread")),
+      { threadOversight: true },
+    )!;
+    const competitor = { ...item, value: "action:competitor", searchTerms: [competitorTerm] };
+    const groups = filterCommandPaletteGroups({
+      activeGroups: [{ value: "actions", label: "Actions", items: [item, competitor] }],
+      query,
+      isInSubmenu: false,
+      projectSearchItems: [],
+      threadSearchItems: [],
+    });
+    expect(groups.flatMap((group) => group.items)).toEqual(
+      first === "oversight" ? [item, competitor] : [competitor, item],
+    );
+  });
+
+  it("requires a scoped thread and an explicitly enabled capability", () => {
+    const ref = scopeThreadRef(EnvironmentId.make("remote"), ThreadId.make("thread"));
+    expect(oversightPaletteItem(null, { threadOversight: true })).toBeNull();
+    expect(oversightPaletteItem(ref, undefined)).toBeNull();
+    expect(oversightPaletteItem(ref, {})).toBeNull();
+    expect(oversightPaletteItem(ref, { threadOversight: false })).toBeNull();
+  });
+});
 
 describe("linked pull request thread navigation", () => {
   it("keeps archived relations searchable and routes them through the PR environment", async () => {
